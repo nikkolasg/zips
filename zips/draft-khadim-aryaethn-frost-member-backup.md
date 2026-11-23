@@ -401,6 +401,20 @@ Under wrapper $\mathtt{0x01}$ the payload and its items are encrypted
 together. Wrapper $\mathtt{0x00}$ carries a payload and its items in the
 clear (see [Rationale]).
 
+An envelope is bytes. An encoder that writes an envelope as text MUST write
+the base64url encoding (RFC 4648, section 5 [^rfc4648-base64url]) of the
+envelope's bytes without padding, and nothing before or after it. A decoder
+that reads text MUST ignore ASCII whitespace and line breaks anywhere in it,
+MUST accept the alphabet of section 4 [^rfc4648-base64] as well as that of
+section 5, with or without `=` padding, and MUST then apply the decoding of an
+envelope (see [Decoding]) to the bytes. A decoder MUST reject text that is
+neither a member backup string nor the base64 of an envelope.
+
+Every envelope starts with the bytes $\mathtt{0x8A}$ $\mathtt{0x5A}$
+$\mathtt{0x46}$ $\mathtt{0x42}$ $\mathtt{0x01}$, so its text starts with
+`ilpGQgE` (`ilpGQgEA` under wrapper $\mathtt{0x00}$, `ilpGQgEB` under wrapper
+$\mathtt{0x01}$), which no member backup string starts with.
+
 ### Recovery code
 
 A recovery code is 128 bits. An encoder MUST draw them from a cryptographic
@@ -615,7 +629,9 @@ from. A decoder of an envelope also parses the items that follow a version 2
 payload.
 
 The decoder reads the input as it is given. It MUST NOT remove or skip any
-byte of it, such as a space or a line break before or after a string. A wallet
+byte of it, such as a space or a line break before or after a string. The
+text of an envelope is the one exception: its decoder ignores whitespace (see
+[Envelope]). A wallet
 that takes a string from its user removes such characters before it calls the
 decoder.
 
@@ -667,9 +683,10 @@ envelope if any of the following holds:
 - a private-use item's value is shorter than 4 bytes.
 
 A decoder that takes more than one of these forms from one input tells them
-apart by the first bytes. An envelope starts with the four magic bytes. A
-member backup string starts with `zkfrost1` or `ZKFROST1` in ASCII. A payload
-starts with its format version, $\mathtt{0x01}$ or $\mathtt{0x02}$.
+apart by the first bytes. An envelope starts with the four magic bytes, and
+the text of an envelope with `ilpGQgE` (see [Envelope]). A member backup
+string starts with `zkfrost1` or `ZKFROST1` in ASCII. A payload starts with
+its format version, $\mathtt{0x01}$ or $\mathtt{0x02}$.
 
 A decoder parses a payload in two steps:
 
@@ -1230,11 +1247,15 @@ same. A wallet can keep the two secrets apart from the rest without a new
 format: [Keeping the secret fields apart] says how, and what a
 party learns from each part.
 
-**Telling the forms apart.** The first byte of an envelope, $\mathtt{0x8A}$,
-is not printable ASCII and not a Bech32m character, and no UTF-8 text starts
-with it. A string starts with `zkfrost1`. A payload starts with
-$\mathtt{0x01}$ or $\mathtt{0x02}$. A decoder therefore tells them apart from
-the first bytes, without being told which one it was given.
+**Telling the forms apart.** A decoder can be given three kinds of input: a
+string, which starts with `zkfrost1`; the bytes of an envelope, whose first
+byte $\mathtt{0x8A}$ is not printable ASCII and not a Bech32m character, so
+that no UTF-8 text starts with it; and the text of an envelope, which starts
+with `ilpGQgE`. The bytes of a payload start with $\mathtt{0x01}$ or
+$\mathtt{0x02}$. A decoder therefore tells them apart from the first bytes,
+without being told which one it was given. The text of an envelope needs no
+prefix of its own: the magic already identifies it, and an encrypted envelope
+detects damage when it is opened.
 
 **Wrapper 0x00.** An unencrypted payload without items needs no envelope:
 the payload bytes or the string carry it. Wrapper $\mathtt{0x00}$ carries a
@@ -1512,7 +1533,8 @@ height 0, as a string:
   no version of this ZIP uses, such as $\mathtt{0x03}$, and the count of
   rejected strings in [Test vectors] checked again.
 - **Integrity of an unencrypted envelope.** An envelope under wrapper
-  $\mathtt{0x00}$ has no checksum. Should it carry one?
+  $\mathtt{0x00}$ has no checksum, and neither has its text form. Should it
+  carry one?
 - **Items that a decoder has to understand.** Every item can be skipped. ZIP
   316 reserves a range of typecodes that a consumer has to understand or else
   reject the whole key [^zip-0316-metadata]. This ZIP has no such range: a
@@ -1572,6 +1594,10 @@ height 0, as a string:
 [^zip-2005-dlog-before]: [ZIP 2005: Ironwood Quantum Recoverability — Effects of discrete-logarithm-breaking attacks before the switch to the Recovery Protocol](zip-2005.md#effectsofdiscrete-logarithm-breakingattacksbeforetheswitchtotherecoveryprotocol)
 
 [^Bitcoin-CompactSize]: [Variable length integer. Bitcoin Wiki](https://en.bitcoin.it/wiki/Protocol_documentation#Variable_length_integer)
+
+[^rfc4648-base64]: [RFC 4648: The Base16, Base32, and Base64 Data Encodings. Section 4: Base 64 Encoding](https://www.rfc-editor.org/rfc/rfc4648.html#section-4)
+
+[^rfc4648-base64url]: [RFC 4648: The Base16, Base32, and Base64 Data Encodings. Section 5: Base 64 Encoding with URL and Filename Safe Alphabet](https://www.rfc-editor.org/rfc/rfc4648.html#section-5)
 
 [^xchacha]: [XChaCha: eXtended-nonce ChaCha and AEAD_XChaCha20_Poly1305. Internet-Draft draft-irtf-cfrg-xchacha-03](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-xchacha-03)
 
