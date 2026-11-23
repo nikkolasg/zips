@@ -54,9 +54,46 @@ Derivation
 : How $\mathsf{nk}$ and $\mathsf{rivk}$ are obtained from $\mathsf{sk}$ and
   $\mathsf{ak}$. This ZIP knows two, defined in [Derivations].
 
+Verifying share
+
+: The public key of one member's signing share: the signing share multiplied
+  by the Orchard spend authorization base point
+  $\mathcal{G}^{\mathsf{Orchard}}$ [^protocol-concretespendauthsig].
+
+Payload
+
+: The bytes that hold one member's backup, in one of the versions defined in
+  this ZIP.
+
 Member backup string
 
-: The string defined in this ZIP.
+: The text form of a payload, defined in [Encoding].
+
+Envelope
+
+: An optional binary encoding of a payload, which can also carry items after
+  a version 2 payload, in the clear or encrypted under a recovery code, defined
+  in [Envelope].
+
+Item
+
+: Optional data that an envelope carries after a version 2 payload, defined in
+  [Items].
+
+Encoder
+
+: Software that writes a payload, a member backup string or an envelope.
+
+Decoder
+
+: Software that reads a payload, a member backup string or an envelope, and
+  gives the fields of the payload and the items of an envelope, as [Decoding]
+  specifies.
+
+Wallet
+
+: Software that holds a member. It uses an encoder to export the member and a
+  decoder to restore it.
 
 
 # Abstract
@@ -72,6 +109,16 @@ group and tells the wallet which key derivation the group uses.
 
 Version 1 of the payload is byte-for-byte the `zkfrost` string that Zkool
 already ships, so existing backups stay valid.
+
+Version 2 of the payload also holds the group's viewing key or the means to
+derive it, the network and a birthday height, so that it restores on its own.
+
+How a wallet stores or moves a payload is the wallet's choice. This ZIP
+defines two optional encodings of a payload for the wallets that want them:
+the string, which holds a payload and nothing else, and an envelope, which
+holds a payload in the clear or encrypted under a recovery code. After a
+version 2 payload, an envelope can carry items: optional data such as the
+public commitment from which every member's verifying share is computed.
 
 The string is more sensitive than the signing share it carries: it also
 carries $\mathsf{sk}$, from which a holder can compute the group's quantum
@@ -115,6 +162,18 @@ key, $\mathsf{sk}$ yields $\mathsf{nk}$ but not the incoming viewing key, which
 also depends on $\mathsf{ak}$. The string does reveal $t$, $n$ and the member's
 identifier.
 
+A version 2 payload gives the group's full viewing key on its own: it holds
+$\mathsf{ak}$ with $\mathsf{sk}$, or the viewing key itself. It also names the
+network and a birthday height. The items of an envelope can say more about the
+group: the group commitment gives every member's verifying share, and a
+registered item holds what its registrant's specification defines. All of
+this is as private as the payload that they come with.
+
+An envelope under wrapper $\mathtt{0x01}$ hides its payload, but shows its
+salt. When the salt is a value fixed for the group, anyone who sees two such
+envelopes learns that they belong to the same group, and anyone who knows the
+group's value recognises its envelopes. A random salt shows nothing.
+
 A wallet that shows the string as a QR code exposes it to cameras and
 onlookers, as with any secret displayed on screen.
 
@@ -128,6 +187,12 @@ onlookers, as with any secret displayed on screen.
 - The format does not depend on how $\mathsf{sk}$ was agreed.
 - Backups made with Zkool's `zkfrost` string stay valid.
 - The format can gain new versions without breaking existing strings.
+- A member can be rebuilt from a version 2 payload alone.
+- A backup can carry public data of the group, and data of one wallet, next to
+  the payload, without a new version of the payload for each addition. A
+  wallet that does not know such data still restores the member.
+- A payload can be stored encrypted, and the encryption can change without
+  changing the payload.
 
 
 # Non-requirements
@@ -135,10 +200,14 @@ onlookers, as with any secret displayed on screen.
 - Key generation, including how the members agree on $\mathsf{sk}$
   [^zip-0312-key-generation].
 - Signing, and the transport between members.
-- Encryption of the string at rest (see [Open issues]).
-- A birthday height. ZIP 316 lets a unified full viewing key carry one
-  (typecode $\mathtt{0xC0}$) [^zip-0316-birthday], and the restore already
-  needs that key.
+- How a wallet stores, shows or moves a payload.
+- Encryption under a passphrase (see [Open issues]).
+- A birthday height in version 1. ZIP 316 lets a unified full viewing key
+  carry one (typecode $\mathtt{0xC0}$) [^zip-0316-birthday], and a version 1
+  restore already needs that key.
+- The layout of the items that this ZIP registers to a wallet (see
+  [Registered items]).
+- How the other members recognise a restored member.
 - Splitting $\mathsf{qsk}$ between members.
 - FROST groups using Sapling keys.
 
@@ -174,19 +243,47 @@ Legacy derivation
 
 ## Encoding
 
+A member's backup is a payload: a sequence of bytes in one of the versions
+defined below. The version 2 payload is the one discussed in zcash/zips#1413
+[^zips-1413-v2], unchanged.
+
+How a wallet stores, shows or moves a payload is the wallet's choice: a file,
+a QR code, a container of its own. A wallet conforms whatever it puts the
+payload in, as long as the bytes of the payload are unchanged. An unencrypted
+payload needs nothing around it: it is the payload bytes.
+
+This ZIP defines two encodings of a payload. Both are optional. A wallet uses
+one when it wants what that encoding gives:
+
+- a member backup string, defined in this section: text with a checksum, which
+  a user can copy. It holds a payload and nothing else;
+- an envelope, defined in [Envelope]: bytes that hold a payload, in the clear
+  or encrypted under a recovery code, and after a version 2 payload, zero or
+  more items (see [Items]).
+
+An encoder that writes a member backup string or an envelope, and a decoder
+that reads one, MUST follow the rules of that encoding.
+
 A member backup string is the Bech32m [^bip-0350] encoding of a payload, with
 the human-readable part `zkfrost`. As in ZIP 316 [^zip-0316], the length limit
-of Bech32m is not applied; a version 1 string is 123 characters long.
+of Bech32m is not applied; a version 1 string is 123 characters long, and a
+version 2 string is 186 to 286 characters long.
+
+A member backup string never carries items. Items can make a backup several
+kilobytes long, which as a string would be thousands of characters, far
+beyond the length that the Bech32m checksum is designed for (see
+[Rationale]). An envelope carries them.
 
 Encoders MUST produce lowercase strings. Decoders MUST accept a string that is
 entirely lowercase or entirely uppercase, and MUST reject a string in mixed
 case, as Bech32m requires. A wallet can still show the string in uppercase,
 for instance in a QR code (see [Rationale]), by converting it after encoding.
 
-The human-readable part is the same on Mainnet and Testnet, and the payload
+The human-readable part is the same on every network. A version 1 payload
 names no network: the network is given by the unified full viewing key used to
-restore. A string paired with another group's viewing key, on either network,
-fails the check in [Restore].
+restore. A version 1 string paired with another group's viewing key, on either
+network, fails the check in [Restore]. A version 2 payload names its network
+in a field.
 
 ## Payload, version 1
 
@@ -210,25 +307,431 @@ every share are negated. The `reddsa` crate does this at the end of its key
 generation, and frost-client does it after the DKG. An implementation that
 skips this step would export a wrong share for about half of all groups.
 
+## Payload, version 2
+
+A version 2 payload is, with the offset of each field in its four layouts:
+
+| Field | Size | sk, short | sk, full | no sk, short | no sk, full |
+|-------|------|-----------|----------|--------------|-------------|
+| format version, $\mathtt{0x02}$ | 1 | 0 | 0 | 0 | 0 |
+| key source: $\mathtt{0x00}$ ZIP 2005 from $\mathsf{sk}$, $\mathtt{0x01}$ legacy from $\mathsf{sk}$, $\mathtt{0x02}$ viewing key only | 1 | 1 | 1 | 1 | 1 |
+| network: $\mathtt{0x00}$ Mainnet, $\mathtt{0x01}$ Testnet | 1 | 2 | 2 | 2 | 2 |
+| threshold $t$ | 1 | 3 | 3 | 3 | 3 |
+| group size $n$ | 1 | 4 | 4 | 4 | 4 |
+| identifier form: $\mathtt{0x00}$ short, $\mathtt{0x01}$ full | 1 | 5 | 5 | 5 | 5 |
+| identifier | 1 or 32 | 6 | 6 | 6 | 6 |
+| signing share | 32 | 7 | 38 | 7 | 38 |
+| birthday height | 4 | 39 | 70 | 39 | 70 |
+| $\mathsf{sk}$ | 32 | 43 | 74 | | |
+| $\mathsf{ak}$ | 32 | 75 | 106 | | |
+| $\mathsf{ak} \,\|\, \mathsf{nk} \,\|\, \mathsf{rivk}$ | 96 | | | 43 | 74 |
+| **length** | | **107** | **138** | **139** | **170** |
+
+Key sources $\mathtt{0x00}$ and $\mathtt{0x01}$ use the "sk" layouts,
+$\mathtt{0x02}$ the "no sk" ones. The short identifier is the integer $i$; the
+full one is the canonical little-endian Pallas scalar. The birthday is a
+little-endian block height on the payload's network, 0 if unknown.
+
+The key source says where $\mathsf{nk}$ and $\mathsf{rivk}$ come from, and
+fixes the last two fields:
+
+| Key source        | Meaning | $\mathsf{sk}$ field | Last field |
+|-------------------|---------|---------------------|------------|
+| $\mathtt{0x00}$   | ZIP 2005 derivation from $\mathsf{sk}$ and $\mathsf{ak}$ | 32 bytes | $\mathsf{ak}$, 32 bytes |
+| $\mathtt{0x01}$   | legacy derivation from $\mathsf{sk}$ | 32 bytes | $\mathsf{ak}$, 32 bytes |
+| $\mathtt{0x02}$   | viewing key only; the group has no $\mathsf{sk}$ | absent | Orchard full viewing key, 96 bytes |
+
+The $\mathsf{ak}$ field is the 32-byte encoding of $\mathsf{ak}$ that starts a
+raw Orchard full viewing key. The Orchard full viewing key field is the raw
+encoding of § 5.6.4.4 of the protocol specification
+[^protocol-orchardfullviewingkeyencoding]: the 32-byte encodings of
+$\mathsf{ak}$, $\mathsf{nk}$ and $\mathsf{rivk}$, in this order.
+
+The network is $\mathtt{0x00}$ for Mainnet or $\mathtt{0x01}$ for Testnet. No
+value is given to Regtest: ZIPs do not specify Regtest, which is left to
+implementations, and any other value fails decoding (see [Decoding]).
+
+The threshold $t$ and the group size $n$ are as in version 1.
+
+The identifier form is $\mathtt{0x00}$ (short) or $\mathtt{0x01}$ (full):
+
+- short: the member identifier field is one byte, an integer $i$ from 1 to
+  255. The member's FROST identifier is the Pallas scalar with integer
+  value $i$.
+- full: the member identifier field is 32 bytes, the little-endian encoding
+  of the member's FROST identifier, a Pallas scalar.
+
+An encoder MUST use the short form when the identifier is an integer from 1 to
+255, and a decoder MUST reject a full form that would fit in the short one
+(see [Decoding]), so each member has exactly one encoding. The
+identifier is not compared with $n$: a group whose shares were refreshed to
+remove a member keeps the other members' identifiers [^frost-refresh], so it
+can have identifiers 1, 2 and 4 with $n = 3$.
+
+The signing share is encoded as in version 1, and the same rule on its sign
+applies (see [Payload, version 1]).
+
+The birthday height is a block height on the network that the payload names,
+in little-endian order. No block below it holds a transaction of the group. It
+is 0 when the encoder does not know such a height.
+
+## Envelope
+
+An envelope is the following bytes:
+
+| Size   | Field |
+|--------|-------|
+| 4      | magic: $\mathtt{0x8A}$ $\mathtt{0x5A}$ $\mathtt{0x46}$ $\mathtt{0x42}$ ($\mathtt{0x8A}$, then `ZFB` in ASCII) |
+| 1      | container version, $\mathtt{0x01}$ |
+| 1      | wrapper id |
+| varies | wrapper parameters, fixed by the wrapper id |
+| rest   | body |
+
+The contents of an envelope are a payload, followed, when it is a version 2
+payload, by zero or more items (see [Items]). The wrapper says how the body
+holds them:
+
+| Wrapper id | Wrapper | Wrapper parameters | Body |
+|------------|---------|--------------------|------|
+| $\mathtt{0x00}$ | none | none | the contents |
+| $\mathtt{0x01}$ | recovery code | salt (32 bytes), then nonce (24 bytes) | the encrypted contents, 16 bytes longer than the contents |
+| other      | unassigned | | |
+
+Under wrapper $\mathtt{0x01}$ the payload and its items are encrypted
+together. Wrapper $\mathtt{0x00}$ carries a payload and its items in the
+clear (see [Rationale]).
+
+### Recovery code
+
+A recovery code is 128 bits. An encoder MUST draw them from a cryptographic
+random number generator. It MUST NOT derive them from a passphrase, or let the
+user choose them. Below, $\mathsf{code}$ is the recovery code as 16 bytes.
+
+A wallet shows a recovery code to its user as text:
+
+1. Read $\mathsf{code}$ as one 128-bit integer $c$, in big-endian order.
+2. Write $c$ as 26 symbols of Crockford's Base32 alphabet
+   `0123456789ABCDEFGHJKMNPQRSTVWXYZ` [^crockford-base32], most significant
+   first. A symbol holds 5 bits, so the first symbol is at most `7`.
+3. Append one check symbol, the symbol of value $c \bmod 37$ in the alphabet
+   `0123456789ABCDEFGHJKMNPQRSTVWXYZ*~$=U`.
+4. Write these 27 symbols in groups of four separated by `-`; the last group
+   has three symbols.
+
+For example, the bytes $\mathtt{0x00}, \mathtt{0x01}, \ldots, \mathtt{0x0F}$
+give `0004-1061-050R-3GG2-8A1C-60T3-GF6`.
+
+A wallet that reads a recovery code MUST ignore `-` and spaces, MUST ignore
+case, and MUST read `I` and `L` as `1` and `O` as `0`. It MUST reject the text
+if any of the following holds:
+
+- it does not have exactly 27 symbols;
+- one of the first 26 symbols is not in the 32-symbol alphabet;
+- the last symbol is not in the 37-symbol alphabet;
+- the first symbol is above `7`;
+- the check symbol is not the one computed from the first 26 symbols.
+
+The check symbol catches one wrong symbol, and two different neighbouring
+symbols written in the other order, before any decryption is tried.
+
+### Wrapper 0x01, recovery code
+
+The contents are encrypted with XChaCha20-Poly1305 [^xchacha] under a key
+derived from a recovery code.
+
+salt
+
+: 32 bytes chosen by the encoder and stored in the clear. They make one
+  recovery code give a different key for each salt. An encoder MUST use either
+  32 bytes from a cryptographic random number generator, or a value that is
+  fixed for the group and that the wallet does not need to keep secret, such
+  as an identifier of the group.
+
+nonce
+
+: 24 bytes. An encoder MUST draw them from a cryptographic random number
+  generator for each envelope it writes.
+
+key
+
+: $\mathsf{BLAKE2b\text{-}256}(\texttt{"ZcashFROSTBackup"},\, \mathsf{code} \,\|\, \mathsf{salt})$,
+  that is BLAKE2b [^protocol-concreteblake2] with a 32-byte output, the
+  16-byte personalization `ZcashFROSTBackup`, no key and no salt parameter,
+  applied to the 48 bytes $\mathsf{code} \,\|\, \mathsf{salt}$.
+
+associated data
+
+: The 38 bytes of the envelope that precede the nonce: the magic, the container
+  version, the wrapper id and the salt.
+
+body
+
+: The XChaCha20-Poly1305 encryption of the contents (the payload and its
+  items) under the key, the nonce and the associated data: the ciphertext, as
+  long as the contents, followed by the 16-byte tag.
+
+No password hashing function is applied, because the recovery code is 128
+random bits and not a passphrase.
+
+## Items
+
+An item is optional data that an envelope carries after a version 2 payload
+(see [Envelope]). No item follows a version 1 payload, and a member backup
+string carries none. An item is encoded as:
+
+| Size   | Field |
+|--------|-------|
+| 1      | typecode |
+| varies | length of the value in bytes, as a $\mathtt{compactSize}$ [^Bitcoin-CompactSize] |
+| length | value |
+
+The items take all the bytes of the envelope's body after the payload. An
+encoder MUST write items in strictly increasing order of typecode, so a
+typecode appears at most once, and MUST write each length in the shortest
+$\mathtt{compactSize}$ form. A body therefore has one encoding.
+
+A decoder MUST skip an item whose typecode it does not know. A wallet built
+before an item was defined still restores the member from an envelope that
+carries it.
+
+The typecodes are divided as follows:
+
+| Typecode | Use |
+|----------|-----|
+| $\mathtt{0x00}$ | never used |
+| $\mathtt{0x01}$ to $\mathtt{0x7F}$ | standard items, defined by this ZIP |
+| $\mathtt{0x80}$ to $\mathtt{0xBF}$ | registered items, assigned to a wallet or a protocol by the table in [Registered items] |
+| $\mathtt{0xC0}$ to $\mathtt{0xFF}$ | private use, never assigned (see [Private-use items]) |
+
+The standard items are:
+
+| Typecode | Item | Length of the value |
+|----------|------|---------------------|
+| $\mathtt{0x01}$ | group commitment | $32 \cdot (t - 1)$ |
+| $\mathtt{0x02}$ to $\mathtt{0x7F}$ | unassigned | |
+
+An encoder MUST NOT write an unassigned standard typecode.
+
+### Group commitment
+
+Key generation fixes a secret polynomial $f$ of degree $t - 1$ over the Pallas
+scalar field: $f(0)$ is the group's Spend authorizing key, and
+$f(i)$ is the signing share of the member whose identifier is $i$. Let
+$a_0, \ldots, a_{t-1}$ be its coefficients, so that
+$f(x) = \sum_{k=0}^{t-1} a_k \cdot x^k$. The group commitment is the $t$ Pallas
+points
+
+$$\Phi_k = [a_k]\, \mathcal{G}^{\mathsf{Orchard}} \quad \text{for } k = 0, \ldots, t - 1,$$
+
+where $\mathcal{G}^{\mathsf{Orchard}}$ is the Orchard spend authorization base
+point [^protocol-concretespendauthsig]. FROST key generation outputs these
+points as its verifiable secret sharing commitment. A trusted dealer computes
+them from the coefficients it chose [^frost-vss]. In a distributed key
+generation, each participant commits to a polynomial of its own and $f$ is the
+sum of these polynomials, so $\Phi_k$ is the sum of the participants' $k$-th
+commitment points; COCKTAIL-DKG calls it the aggregated commitment
+[^cocktail-dkg-round2].
+
+The group commitment is taken after the sign of the group verifying key is
+fixed. Key generation can output a group verifying key whose encoding has a
+$\tilde{y}$ bit of $1$. In that case the group verifying key, every signing
+share and every verifying share are negated (see [Payload, version 1]). This
+replaces $f$ by $-f$, so every $\Phi_k$ is negated as well. The payload and
+its items hold the values after this step:
+
+- the payload's $\mathsf{ak}$ is the encoding of the group verifying key after
+  the step;
+- its signing share is $f(i)$ for the polynomial $f$ after the step;
+- the group commitment item is the commitment of that same $f$.
+
+An encoder MUST NOT write commitment points from before this step. The
+commitment points that the participants of a distributed key generation
+exchange are from before the step, so an encoder that computes the group
+commitment from them MUST negate every $\Phi_k$ when the step negated the
+shares.
+
+The group commitment in an envelope is that of the polynomial of which the
+signing share of the envelope's payload is a value.
+
+The value of the item is $\Phi_1, \ldots, \Phi_{t-1}$ in this order, each as
+the 32-byte encoding $\mathsf{repr}_{\mathbb{P}}$ of a Pallas point
+[^protocol-pallasandvesta]. $\Phi_0$ is not in the item, because the payload
+already holds it: $\Phi_0 = [f(0)]\, \mathcal{G}^{\mathsf{Orchard}}$ is the
+group verifying key, and the 32 bytes of $\mathsf{ak}$ are its encoding under
+$\mathsf{repr}_{\mathbb{P}}$, with a $\tilde{y}$ bit of $0$
+[^protocol-updated-orchardkeycomponents]. A decoder obtains $\Phi_0$ by
+decoding these 32 bytes as a Pallas point. An encoder MUST NOT write the item
+unless the $\Phi_0$ of the commitment it holds has exactly this encoding.
+
+The verifying share of the member whose identifier is $i$ is
+
+$$Y_i = \sum_{k=0}^{t-1} [i^k]\, \Phi_k.$$
+
+With this item, a restored member computes the verifying share of every
+member whose identifier it knows, without contacting anyone.
+
+Since $\Phi_0$ is read from $\mathsf{ak}$ and not stored, an item that holds
+the points from before the sign step, with a share from after it, cannot be
+recognised by its $\Phi_0$. It is recognised by the member's own verifying
+share: the restore computes $Y_i$ from $\mathsf{ak}$ and the item, and compares
+it with the signing share multiplied by $\mathcal{G}^{\mathsf{Orchard}}$ (see
+[Restore, version 2], step 5). With $\Phi_1, \ldots, \Phi_{t-1}$ of the wrong
+sign, the two are equal only if $\sum_{k=1}^{t-1} [i^k]\, \Phi_k$ is the zero
+point, which has negligible probability for a polynomial chosen at random.
+
+The group commitment holds no secret.
+
+### Registered items
+
+A registered item is assigned by this table to a wallet or a protocol, the
+registrant. The registrant defines the layout of the value in its own
+specification. Other wallets skip the item.
+
+| Typecode | Registrant | Item |
+|----------|------------|------|
+| $\mathtt{0x80}$ to $\mathtt{0x8F}$ | Zodl | reserved for the registrant; layouts in the registrant's own specification |
+| $\mathtt{0x90}$ to $\mathtt{0xBF}$ | | unassigned |
+
+An encoder MUST NOT write an unassigned registered typecode, or a typecode
+assigned to another registrant unless it follows that registrant's
+specification.
+
+The registrant's specification states how sensitive the value of each of its
+items is.
+
+### Private-use items
+
+A private-use typecode is never assigned, so two wallets can use the same one
+for different data. An encoder MUST start the value of a private-use item
+with a 4-byte tag chosen by the wallet that writes it. A decoder MUST skip a
+private-use item whose tag is not one of its own.
+
 ## Decoding
 
-A decoder MUST reject the string if any of the following holds:
+The input of a decoder is a payload, a member backup string or an envelope.
+A decoder of a string or of an envelope first takes the payload out of it, as
+below. Every payload is then parsed under the same rules, wherever it came
+from. A decoder of an envelope also parses the items that follow a version 2
+payload.
 
-- it is not valid Bech32m, including a bad checksum, a Bech32 checksum, or
-  mixed case;
-- the bits left over when converting its data part to bytes are more than 4
-  or not all zero, as ZIP 173 requires [^zip-0173]. A version 1 string leaves
-  1 bit, so each payload has only one lowercase string;
-- its human-readable part, compared case-insensitively, is not `zkfrost`;
-- the format version is not $\mathtt{0x01}$;
+The decoder reads the input as it is given. It MUST NOT remove or skip any
+byte of it, such as a space or a line break before or after a string. A wallet
+that takes a string from its user removes such characters before it calls the
+decoder.
+
+A decoder that reads a member backup string MUST reject the string if any of
+the following holds:
+
+- it is not valid Bech32m, including a bad checksum, a Bech32 checksum,
+  mixed case, or a character that Bech32m does not allow, such as a space
+  or a line break after the string;
+- the bits left over when converting its data part to bytes are more than
+  4 or not all zero, as ZIP 173 requires [^zip-0173]. A version 1 string
+  leaves 1 bit, so each payload has only one lowercase string;
+- its human-readable part, compared case-insensitively, is not `zkfrost`.
+
+The payload is the bytes that the data part converts to.
+
+A decoder that reads an envelope MUST reject it if any of the following
+holds:
+
+- it does not start with the four magic bytes of [Envelope];
+- it is shorter than 6 bytes, so that it has no container version or no
+  wrapper id;
+- the container version is not $\mathtt{0x01}$;
+- the wrapper id is neither $\mathtt{0x00}$ nor $\mathtt{0x01}$;
+- the wrapper id is $\mathtt{0x01}$, and the envelope is shorter than 78
+  bytes or its body does not decrypt, under the recovery code that the user
+  gives, with the key, nonce and associated data of
+  [Wrapper 0x01, recovery code].
+
+The contents are the body for wrapper $\mathtt{0x00}$, and the decrypted body
+for wrapper $\mathtt{0x01}$. The payload is the start of the contents: for
+format version $\mathtt{0x01}$, 68 bytes; for format version $\mathtt{0x02}$,
+the length that its key source and identifier form give in
+[Payload, version 2]. When the contents are shorter than that, or end before
+the bytes that give that length, the payload is the whole contents, and it
+fails the length rule of its version below; when those bytes hold an unknown
+value, the payload fails rule 4 below. The bytes after a version 1 payload make
+the decoder reject the envelope. The bytes after a version 2 payload are its
+items: once the payload has been decoded, the decoder MUST reject the
+envelope if any of the following holds:
+
+- an item has typecode $\mathtt{0x00}$;
+- an item's typecode is not greater than the typecode of the item before it;
+- an item's length is not in the shortest $\mathtt{compactSize}$ form, or the
+  contents end before the end of the item's length or value;
+- a group commitment item's value is not $32 \cdot (t - 1)$ bytes long, or
+  holds 32 bytes that are not the encoding of a Pallas point, or holds the
+  encoding of the zero point;
+- a private-use item's value is shorter than 4 bytes.
+
+A decoder that takes more than one of these forms from one input tells them
+apart by the first bytes. An envelope starts with the four magic bytes. A
+member backup string starts with `zkfrost1` or `ZKFROST1` in ASCII. A payload
+starts with its format version, $\mathtt{0x01}$ or $\mathtt{0x02}$.
+
+A decoder parses a payload in two steps:
+
+1. Read the format version, the first byte of the payload. The decoder MUST
+   reject the payload if it is empty, which fails the length rule of either
+   version, or if its format version is neither $\mathtt{0x01}$ nor
+   $\mathtt{0x02}$.
+2. Parse the payload under the rules of its version, below.
+
+Checking the container version before the wrapper, and the format version
+before the length, lets a decoder report an envelope or a payload of a later
+version as unsupported rather than as corrupt.
+
+A decoder MUST reject a version 1 payload if any of the following holds:
+
 - the payload is not exactly 68 bytes long;
 - $n = 0$, $i = 0$, $i > n$, $t < 2$, or $t > n$. FROST needs at least two
   signers.
 
-Checking the version before the length lets a decoder report a string of a
-later version as unsupported rather than as corrupt.
+A decoder MUST reject a version 2 payload, or the member backup string that
+holds it, if any of the following holds, checked in this order:
+
+1. it is not valid Bech32m (including mixed case), or the leftover bits are
+   more than 4 or not all zero;
+2. its human-readable part, compared without regard to case, is not
+   `zkfrost`;
+3. the format version is not $\mathtt{0x02}$ (a version 1 payload is decoded
+   under the version 1 rules above);
+4. the key source, network or identifier form is not one of the values in
+   [Payload, version 2];
+5. the payload is not exactly the length its key source and identifier form
+   give;
+6. $t < 2$ or $t > n$;
+7. the identifier is 0, or, in the full form, it is not a canonical Pallas
+   scalar or it is an integer from 1 to 255, which the short form holds;
+
+Rules 3 and 4 read only the bytes the payload has: a payload that ends before
+the version, key source, network or identifier form fails rule 5. A truncated
+payload is then reported as damaged, while an unknown value that is present
+still fails rule 4.
+
+Rules 1 and 2 are those of a member backup string, above. A version 2 payload
+given as bytes, or taken from an envelope, is checked from rule 3 on.
+
+These seven rules are those of the version 2 text discussed in
+zcash/zips#1413 [^zips-1413-v2], with only their references adapted to this
+document. A version 2 payload is the same, and decodes the same, whether it
+is given as bytes, in a string or in an envelope.
+
+Decoding checks the encoding and nothing else. For both versions, it does not
+check that the signing share is a canonical Pallas scalar other than zero,
+that $\mathsf{sk}$ is a valid Orchard spending key, that the $\mathsf{ak}$
+field encodes a valid Spend validating key, that the Orchard full viewing key
+field is a valid key, or that the signing share matches the group
+commitment item. These are checked when the member is restored (see [Restore] and
+[Restore, version 2]), so a payload that decodes is not yet one that
+restores.
 
 ## Restore
+
+This section restores a version 1 payload. [Restore, version 2] restores a
+version 2 payload.
 
 The inputs are a member backup string and the group's unified full viewing
 key. The viewing key MUST contain an Orchard component (typecode
@@ -251,6 +754,11 @@ $\mathsf{rivk}$. Ironwood uses the same Orchard-protocol keys.
    the threshold $t$ and $\mathsf{ak}$ as the group verifying key. If the
    wallet knows the group's verifying shares, it SHOULD check that the
    member's verifying share matches.
+
+The steps above are those of version 1 as first published. A wallet that
+implements version 2 MUST also reject the string, at step 2, if its signing
+share is zero. Zero is the canonical encoding of a Pallas scalar, so step 2
+as written does not reject it. [Restore, version 2] rejects it at step 3.
 
 A wallet SHOULD tell the user which derivation was found, and SHOULD warn when
 it is the legacy one, whose notes are not quantum recoverable.
@@ -285,26 +793,339 @@ is right. The signing transport is out of scope for this ZIP, but a signing
 protocol used with these strings SHOULD carry each signer's verifying share,
 so that a member restored from a string is checked when it first signs.
 
+## Restore, version 2
+
+The input is a version 2 payload, in any of its forms, and the items of the
+envelope that carried it, if any. No viewing key is needed. The steps are those of the version 2 text discussed in
+zcash/zips#1413 [^zips-1413-v2-restore], with the additions that this ZIP makes
+for the signing share of zero and for the group commitment item.
+
+The wallet carries out the steps below in order. It MUST reject the payload,
+and restore nothing from it, when a step says to reject.
+
+1. Decode the payload as above.
+2. Reject it if its network is not the wallet's.
+3. Reject it if the signing share is not a canonical Pallas scalar or is zero,
+   or, for key sources $\mathtt{0x00}$ and $\mathtt{0x01}$, if $\mathsf{sk}$ is
+   not a valid Orchard spending key, that is if
+   $\mathsf{H^{ask}}(\mathsf{sk}) = 0$, as in [Restore].
+4. Build the full viewing key: for $\mathtt{0x02}$, take it from the payload;
+   for $\mathtt{0x00}$ and $\mathtt{0x01}$, compute $\mathsf{nk}$ and
+   $\mathsf{rivk}$ from $\mathsf{sk}$ and $\mathsf{ak}$ under the recorded
+   derivation (see [Derivations]); no other derivation is tried. Reject the
+   payload if that key is invalid under the rule for Orchard raw full viewing
+   keys [^protocol-orchardfullviewingkeyencoding], that is if $\mathsf{ak}$,
+   $\mathsf{nk}$ or $\mathsf{rivk}$ is not canonically encoded, if
+   $\mathsf{ak}$ is not a valid affine x-coordinate of a Pallas point in
+   $\mathbb{P}^*$, or if the incoming viewing key $\mathsf{ivk}$ or the
+   internal incoming viewing key $\mathsf{ivk}_{\mathsf{internal}}$ is $0$ or
+   $\bot$ [^protocol-updated-orchardkeycomponents]. If the wallet was also
+   given a viewing key for the group, reject the payload when the Orchard
+   component of that key is not this key.
+5. If the envelope carried a group commitment item, let $\Phi_0$ be the point that
+   the 32 bytes of $\mathsf{ak}$ encode, compute the member's own verifying
+   share $Y_i$ from $\Phi_0$ and the item (see [Group commitment]), where $i$
+   is the member's identifier, and reject the payload if the signing share
+   multiplied by $\mathcal{G}^{\mathsf{Orchard}}$ is not $Y_i$. Rebuild the
+   member's key material from the identifier, the signing share, $t$ and
+   $\mathsf{ak}$. If the wallet knows the group's verifying shares, it SHOULD
+   check that the member's verifying share matches.
+6. Before it shows an address to receive funds, the wallet SHOULD check the
+   viewing key against a source the member trusts, such as an address of the
+   group recorded before, or the same key from at least two other members.
+
+For key source $\mathtt{0x02}$, the wallet MUST say that the payload holds no
+$\mathsf{sk}$, so it can't recover the group's notes under ZIP 2005.
+
+A wallet SHOULD say which network a payload is for when step 2 rejects it.
+The wallet scans the chain of its network from the birthday height, or from
+the activation of the Orchard protocol when the birthday height is 0.
+
+The Bech32m checksum only catches accidental changes. A string altered and
+encoded again passes it, which is why step 6 applies to every key source. The
+encoding of $\mathsf{ak}$ with a $\tilde{y}$ bit of $1$, which a writer
+produces when it skips the negation of [Payload, version 1], is not a
+canonical x-coordinate, so step 4 rejects it.
+
+After step 4 the wallet has a valid Orchard full viewing key, whatever the
+key source. The check of the group commitment in step 5 is the only check of
+the signing share against the group that needs nothing outside the payload,
+and it needs the group commitment item.
+
+The fields of the payload are mandatory, and the items are not. A wallet
+that does not support the value of a field of the payload MUST reject it. This covers a key source, an identifier form, and an identifier that
+the wallet cannot use, such as one that is not an integer from 1 to $n$. The
+wallet MUST NOT restore the member with another value in place of the one it
+does not support. A wallet that does not know an item skips it (see [Items]),
+and restores the member from the payload and the other items.
+
+This ZIP leaves the following to the wallet. A wallet that is stricter than
+the steps above rejects payloads that this ZIP allows, and restores no payload
+that this ZIP rejects:
+
+- whether it restores a payload that came without a group commitment item,
+  whose signing share step 5 does not check against a commitment;
+- which forms of a payload it reads: the payload bytes, a member backup
+  string, an envelope under either wrapper, or a container of its own;
+- what it requires of the registered and private-use items that it knows,
+  under their own specification, including how their content has to agree
+  with the payload.
+
+What [Restore] says about the derivation to show the user, about retaining
+$\mathsf{sk}$, and about signing nonces applies to version 2 as well. A
+payload of key source $\mathtt{0x02}$ has no $\mathsf{sk}$ to retain, and the
+notes of its group are not quantum recoverable.
+
+Without a group commitment item, the restore checks the signing share only
+against verifying shares that the wallet already knows, as in version 1. With
+one, step 5 catches a share that does not match the commitment stored with
+it: a share stored with the wrong sign, a share of another member, or a
+commitment taken from before the sign of the group verifying key was fixed
+(see [Group commitment]). It does not prove that the stored commitment is the
+group's (see [Security Considerations]).
+
 ## Export
 
 A wallet that exports a member backup string SHOULD export the group's unified
 full viewing key with it, or tell the user that the restore needs it. ZIP 2005
 asks FROST members to retain the group verifying key $\mathsf{ak}$
 [^protocol-updated-orchardkeycomponents]; in version 1 it is only held by the
-viewing key.
+viewing key. A version 2 payload holds $\mathsf{ak}$ itself, and its restore
+needs nothing else.
 
 A wallet MUST NOT put signing nonces, or any other secret beyond the fields
-above, in a version 1 string.
+above, in a version 1 string. A wallet MUST NOT put signing nonces in a
+payload of any version, or in an item.
+
+A wallet that exports a version 2 payload in an envelope SHOULD include the
+group commitment item when it knows the group commitment. A wallet MUST NOT
+export an envelope whose group commitment item and payload's signing share
+fail step 5 of
+[Restore, version 2].
 
 ## Storage and transmission
 
 Wallets MUST protect every member backup string at least as securely and
 reliably as $\mathsf{ask}$, as ZIP 2005 requires of $\mathsf{qsk}$
-[^zip-2005-usagewithfrost], and not merely like one signing share.
+[^zip-2005-usagewithfrost], and not merely like one signing share. The same
+holds for an unencrypted payload in any other form, and for a recovery code.
+An envelope under wrapper $\mathtt{0x01}$ gives nothing without its recovery
+code; a wallet MUST NOT store the two together.
 
 Wallets SHOULD NOT store or transmit a string encrypted only under public-key
 encryption based on discrete logarithms or on factoring, such as Orchard note
 encryption, X25519, or RSA and elliptic-curve OpenPGP keys.
+
+### Keeping the secret fields apart
+
+A wallet does not have to keep a backup in one place. This section describes
+one way to keep it in two. It is a way to store a payload and its items, which
+is the wallet's choice (see [Encoding]): it defines no new format, and it adds
+no rule for a decoder. Its rules bind only a wallet that offers it.
+
+The section applies to a version 2 payload whose key source is
+$\mathtt{0x00}$ or $\mathtt{0x01}$, with the items that an envelope would
+carry after it. Among the fields of the payload and the group commitment
+item, two are secret: the signing share and $\mathsf{sk}$,
+of 32 bytes each. The others are not secret: the format version, the key
+source, the network, the threshold, the group size, the identifier form and
+the member identifier, the birthday height, $\mathsf{ak}$ and the group
+commitment.
+
+In this section:
+
+- the *secret part* of a payload is its signing share and its $\mathsf{sk}$;
+- the *remaining part* is every other byte of the payload, followed by the
+  items.
+
+A user keeps the secret part on a medium that lasts and that the user guards,
+such as a steel plate. The user keeps the remaining part on a medium that is
+easier to copy and less guarded: paper, a printed QR code, a cloud drive. To
+restore, the wallet takes both parts, puts the payload and its items together
+again, and decodes and restores them as the contents of an envelope (see
+[Decoding] and [Restore, version 2]).
+
+Each secret is 32 bytes, which is what a BIP 39 mnemonic of 24 words encodes:
+256 bits, followed by a checksum of 8 bits [^bip-0039]. Two such mnemonics
+hold the secret part. BIP 39 is used here only to write 32 bytes as words.
+The 32 bytes are the field itself. Nothing is derived from the words: the
+seed derivation of BIP 39 (PBKDF2) is not applied, and neither is any
+hierarchical derivation. The checksum detects an error and does not correct
+it, and it is short: a mnemonic changed at random still passes with
+probability 1 in 256.
+
+The signing share differs for each member. $\mathsf{sk}$ is the same for every
+member of the group, so every member of a group has the same second mnemonic.
+
+A wallet that offers this split:
+
+- MUST put together, before it decodes, exactly the bytes of the payload and
+  the items that were split;
+- MUST NOT put the signing share or $\mathsf{sk}$ in the remaining part;
+- MUST NOT put in the remaining part, in the clear, an item whose
+  specification says that its value is a secret. A registered item can hold
+  data whose sensitivity its registrant's specification states;
+- MUST use the 32 bytes of a field as the entropy of its mnemonic, when it
+  writes a secret as a BIP 39 mnemonic, and MUST NOT apply the seed
+  derivation of BIP 39 to that mnemonic;
+- SHOULD tell the user which mnemonic is the signing share and which is
+  $\mathsf{sk}$, and that neither is the seed of a wallet;
+- SHOULD keep the group commitment item in the remaining part, so that step 5 of
+  [Restore, version 2] checks a signing share that was copied by hand;
+- SHOULD tell the user that the secret part does not restore the member
+  without the remaining part.
+
+The first rule of [Storage and transmission] applies to the secret part, in
+whatever form it is written, as it does to a whole payload. It does not apply
+to the remaining part. The rest of this section says what each part gives to
+a party that holds it alone.
+
+**What the remaining part gives.** A party that finds the remaining part,
+without the secret part, learns the following.
+
+| Fields | What their finder learns |
+|--------|--------------------------|
+| format version, key source | that the bytes are a FROST member backup, and which derivation the group uses |
+| network, threshold $t$, group size $n$, member identifier | that the holder is member $i$ of a $t$-of-$n$ group on that network |
+| birthday height | a height below which the group has no transaction, so roughly when the group was created |
+| $\mathsf{ak}$ and the group commitment | the group's Spend validating key, and the verifying share of every member (see [Group commitment]) |
+
+With these fields alone the finder learns no address, no balance and no
+transaction of the group. The group's Orchard full viewing key is
+$\mathsf{ak}$, $\mathsf{nk}$ and $\mathsf{rivk}$. Both derivations of
+[Derivations] compute $\mathsf{nk}$ and $\mathsf{rivk}$ from $\mathsf{sk}$,
+which is not in the remaining part. The incoming viewing key, the outgoing
+viewing key and every address are derived from all three values
+[^protocol-updated-orchardkeycomponents], so the finder has none of them.
+On the chain, a spend of the group shows a key $\mathsf{rk}$ that is
+$\mathsf{ak}$ re-randomized, which the protocol specification does so that
+the key shown cannot be linked to the key it was made from
+[^protocol-spendauthsig]. The finder does not hold the randomizer of any
+spend, so $\mathsf{ak}$ does not tell it which transactions are the group's.
+$\mathsf{ak}$ does let the finder recognise the group's full viewing key, or
+another member's payload, if it sees one.
+
+The finder cannot sign, and so cannot spend: it holds no signing share. It
+cannot restore the member, since [Restore, version 2] needs the signing share
+and $\mathsf{sk}$. It cannot view the group's transactions, as said above.
+
+$\mathsf{ak}$ and the verifying shares are not secrets, but they are not
+values to publish either. Each is the public key of a secret scalar:
+$\mathsf{ak}$ of the group's Spend authorizing key, and a verifying share of
+a member's signing share. An adversary that can compute discrete logarithms
+on the Pallas curve, for instance with a quantum computer, computes from the
+remaining part the Spend authorizing key and every member's signing share.
+What it can then do depends on the protocol in force:
+
+- While the current Orchard protocol is enabled, ZIP 2005 states that such an
+  adversary can break spend authentication for any shielded address, known
+  to it or not, after finding a single discrete logarithm
+  [^zip-2005-dlog-before]. The remaining part is not what makes that attack
+  possible.
+- Under the Recovery Protocol of ZIP 2005, a spend is assumed to need both a
+  proof of knowledge of $\mathsf{qsk}$ and a signature that verifies under
+  $\mathsf{ak}$ [^zip-2005-threat-model]. With the Spend authorizing key the
+  adversary makes the signature. It does not hold $\mathsf{qsk}$, which is
+  derived from $\mathsf{sk}$, so the remaining part alone does not let it
+  spend through the Recovery Protocol. It lacks only what every member
+  holds: one leaked $\mathsf{sk}$, from any member, completes it.
+
+ZIP 2005 already warns that "a quantum adversary may be able to steal the
+funds with only access to $\mathsf{qsk}$" [^zip-2005-usagewithfrost] (see
+[Security Considerations]). It does not say from which public values such an
+adversary would compute the Spend authorizing key, and this ZIP does not
+establish whether an adversary that holds $\mathsf{qsk}$ and has never seen
+$\mathsf{ak}$ could do so. An adversary that holds the remaining part has
+$\mathsf{ak}$ and does not need to look for it. This applies to a group of
+the ZIP 2005 derivation. The notes of a legacy group are not quantum
+recoverable (see [Derivations]).
+
+**What a party that can change the remaining part can do.** The remaining
+part in the clear is not authenticated. A party that reads it knows the
+member's verifying share $Y_i$. It can choose another $\mathsf{ak}$, for
+instance one whose secret it holds alone, and compute a group commitment
+that still gives $Y_i$ for the member's identifier. A payload put together
+from the unchanged secret part and this changed remaining part passes every
+step of [Restore, version 2], step 5 included. The wallet then shows
+addresses of a viewing key built around that other $\mathsf{ak}$. The group
+cannot spend what these addresses receive, since its signatures do not verify
+under that $\mathsf{ak}$. Whether the party can spend it depends on
+$\mathsf{sk}$, from which $\mathsf{nk}$ and $\mathsf{rivk}$ are derived: a
+party that also holds $\mathsf{sk}$, such as another member, can, and this is
+the attack that [Security Considerations] describes for a viewing key
+obtained elsewhere. A party without $\mathsf{sk}$ cannot, and the funds are
+then out of reach of both. The encryption described below prevents the
+change. Without it, a wallet SHOULD check the restored viewing key against a
+source the member trusts, as [Restore] asks, before it shows an address.
+
+**What the secret part gives.** A party that finds the secret part, without
+the remaining part, holds one signing share and $\mathsf{sk}$.
+
+- The signing share alone signs nothing: fewer than $t$ shares cannot spend
+  (see [Security Considerations]).
+- $\mathsf{sk}$ gives $\mathsf{nk}$ and, under the ZIP 2005 derivation,
+  $\mathsf{qsk}$ and $\mathsf{qk}$. It does not give the full viewing key,
+  because $\mathsf{ak}$ is missing. Under the ZIP 2005 derivation
+  $\mathsf{rivk}$ is computed from $\mathsf{ak}$ as well, and under both
+  derivations the incoming viewing key and the addresses are (see
+  [Derivations] and [^protocol-updated-orchardkeycomponents]). So the finder
+  of the secret part alone views nothing.
+- $\mathsf{ak}$ is not a secret. It is in the remaining part, in the group's
+  unified full viewing key and in every other member's payload. A party that
+  holds $\mathsf{sk}$ and obtains $\mathsf{ak}$ from any of these holds the
+  group's full viewing key and sees every transaction of the group.
+- $\mathsf{sk}$ gives $\mathsf{qsk}$, with what [Security Considerations]
+  says of a leaked $\mathsf{qsk}$.
+
+The secret part is therefore still to be protected as [Storage and
+transmission] requires of a whole payload. What the split changes is that the
+remaining part can be kept with less care.
+
+A mnemonic copied with an error can still pass its checksum. A wrong signing
+share then fails step 5 of [Restore, version 2] when the remaining part holds
+a group commitment item. A wrong $\mathsf{sk}$ fails no step: the wallet derives
+another viewing key and shows another address.
+
+**Encrypting the remaining part.** A wallet that offers the split can also
+encrypt the remaining part under a key derived from the secret part: a hash
+of the signing share followed by $\mathsf{sk}$, with a domain separation
+that the wallet uses for nothing else, as the key of an authenticated
+cipher. This is an option, and this ZIP does not require it. It costs the
+user nothing, because whoever restores the member holds both secrets and
+needs no other code. It gives the following:
+
+- the remaining part found alone is opaque: its finder learns none of the
+  fields above, and an adversary that computes discrete logarithms finds no
+  public key in it. The cipher is symmetric, so recording the ciphertext
+  today gives nothing later;
+- the remaining part is authenticated: a changed one does not decrypt;
+- a secret copied with an error is detected, the signing share and
+  $\mathsf{sk}$ alike: the remaining part does not decrypt.
+
+This is not the envelope of [Envelope]. Wrapper $\mathtt{0x01}$ encrypts a
+whole payload, its secrets included, under a recovery code, which is one more
+secret for the user to keep. Here the key comes from the secrets that the
+user already keeps, and the secrets are not in what is encrypted.
+
+This ZIP does not define the layout of the remaining part, in the clear or
+encrypted (see [Open issues]). Two wallets exchange a payload or an envelope,
+not its parts.
+
+**If the remaining part is lost.** The secret part alone does not restore the
+member. The network, the threshold, the group size, $\mathsf{ak}$ and the
+group commitment are the same in every member's payload, so any other member
+can supply them. Only the identifier is the member's own. With the group
+commitment and the signing share, an identifier of the short form is found
+again: it is the $i$ from 1 to 255 for which the signing share multiplied by
+$\mathcal{G}^{\mathsf{Orchard}}$ equals $Y_i$. An identifier of the full form
+is not found this way; it is not secret, and a user can keep it next to the
+secret part. The birthday height can be replaced by 0. An item that another
+member does not hold is not recovered.
+
+Values supplied by another member are trusted as much as a viewing key
+obtained from another member: a dishonest member can supply an $\mathsf{ak}$
+and a group commitment of its own making, as described above. The checks that
+[Restore] asks for before showing an address apply.
 
 
 # Rationale
@@ -317,29 +1138,178 @@ characters [^zip-0173] [^bip-0350]. A version 1 string is 123 characters
 long, so it keeps the 30-bit checksum without that guarantee, as unified
 addresses and viewing keys do [^zip-0316].
 
-**No network in the string.** A member's share is the same on every network
-the group lives on. The viewing key carries the network.
+**No network in a version 1 string.** A member's share is the same on every
+network the group lives on. The viewing key carries the network. Version 2
+names the network because it holds a birthday height, and a height means
+something on one network only. The network is a byte of the payload and not
+in the human-readable part: decoders check the prefix before the version, so
+a version 1 decoder given another prefix would report a wrong prefix instead
+of an unsupported version. A restore rejects a payload of another network
+rather than moving it, so that a test backup is never restored on Mainnet.
+Regtest has no value, since ZIPs do not specify Regtest.
 
-**$\mathsf{ak}$ is not stored.** The restore needs the viewing key anyway to
-scan the chain, and checking $\mathsf{nk}$ and $\mathsf{rivk}$ against it
-catches a string from another group. The cost is that the string does not
-authenticate $\mathsf{ak}$ (see [Security Considerations]).
+**$\mathsf{ak}$ is not stored in version 1.** The restore needs the viewing
+key anyway to scan the chain, and checking $\mathsf{nk}$ and $\mathsf{rivk}$
+against it catches a string from another group. The cost is that the string
+does not authenticate $\mathsf{ak}$ (see [Security Considerations]). Version 2
+stores $\mathsf{ak}$, or the whole Orchard full viewing key for a group that
+has no $\mathsf{sk}$, so that nothing outside the payload is left to mismatch.
+It stores the raw key and not its unified encoding, which would repeat the
+network.
 
 **$\mathsf{sk}$ is stored whole.** ZIP 2005 makes it necessary "to retain, or
 be able to rederive, $\mathsf{sk}$" [^protocol-updated-orchardkeycomponents],
 and every member already holds it, along with $\mathsf{qsk}$
 [^zip-2005-usagewithfrost].
 
-**The derivation is found, not recorded.** Version 1 is Zkool's existing
-payload, which has no field for it. With two derivations and the viewing key at
-hand, trying both is cheap and unambiguous: both matching would need a
-collision in the hash functions behind $\mathsf{rivk}$. A later version can
-record the derivation explicitly (see [Open issues]).
+**In version 1, the derivation is found, not recorded.** Version 1 is Zkool's
+existing payload, which has no field for it. With two derivations and the
+viewing key at hand, trying both is cheap and unambiguous: both matching would
+need a collision in the hash functions behind $\mathsf{rivk}$. Version 2
+records the derivation in the key source, so a restore tries nothing, and a
+third derivation can be added as a new key source without ambiguity. The key
+source $\mathtt{0x02}$ covers groups that kept no $\mathsf{sk}$, such as those
+made by zcash-sign's `generate`, which Konclave uses.
 
-**One-byte identifier.** It covers groups whose identifiers are the integers
-1 to $n$, as in Zkool and in frost-client's trusted-dealer key generation.
-frost-client's DKG and Zafe derive 32-byte identifiers, which need another
-version (see [Open issues]).
+**One-byte identifier in version 1.** It covers groups whose identifiers are
+the integers 1 to $n$, as in Zkool and in frost-client's trusted-dealer key
+generation. frost-client's DKG and Zafe derive 32-byte identifiers, which
+version 2 holds in its full form. Version 2 requires the short form whenever
+it fits, so that an identifier has one encoding, and does not compare the
+identifier with $n$, so that a group refreshed to remove a member still fits.
+
+**A threshold of at least 2.** With $t = 1$ the polynomial of key generation
+has degree 0: it is the constant $f(0)$, so every member's signing share is
+the group's Spend authorizing key itself. Each member spends alone, a backup
+of one member is a backup of the whole key, and the group commitment item
+would be empty. Such a key is a single-signer key held in several copies, and
+a format for threshold members has nothing to add to it. Both versions
+therefore reject $t < 2$ at decoding.
+
+**Keys are checked at restore, not at decoding.** Version 1 checks
+$\mathsf{sk}$, the signing share and the derived keys in its restore steps,
+and its decoding checks only the layout and the bounds of $t$, $n$ and $i$.
+Version 2 keeps this split, as the text discussed in zcash/zips#1413 does:
+the identifier checks are decoding checks, and the canonical share is a
+restore check. Decoding needs no curve arithmetic beyond reading scalars and
+the points of the group commitment, and the checks that give the payload its
+meaning are in one list, in [Restore, version 2].
+
+**A signing share of zero is rejected.** Zero is the canonical encoding of a
+Pallas scalar, but it is no share: its verifying share is the zero point,
+which the element encoding of ZIP 312 does not accept [^zip-0312]. A member
+restored from it could never sign. Both versions reject it at the restore step
+that checks the canonicity of the share. Neither version 1 as first published
+nor the version 2 text discussed in zcash/zips#1413 names the case, so the
+rule is added here.
+
+**One sign for everything stored.** Orchard requires an $\mathsf{ak}$ whose
+encoding has a $\tilde{y}$ bit of $0$, and key generation meets this by
+negating the whole key material when needed. A payload holds only values from
+after that step. A restore then never negates anything, and $\Phi_0$ does not
+need to be stored, since $\mathsf{ak}$ is its encoding. Storing the points
+that the participants of a distributed key generation exchanged would mean a
+second form of the same group, and a negation to apply again at every
+restore, which is the step that is easy to forget.
+
+**The payload and the envelope.** The version 2 payload is the one discussed
+in zcash/zips#1413 [^zips-1413-v2], unchanged, so every decoder and every test
+vector written against that text holds for this ZIP. What this ZIP adds is
+around the payload: the envelope, and the items it carries. Wallets differ in
+where a backup lives: a file, a QR code, a store that has its own encryption.
+A rule that names one of these would bind every wallet and make no payload
+easier to restore, so this ZIP has none. The string and the envelope are
+defined so that the wallets which want text, or extra data and encryption
+under a recovery code, do it in one way.
+
+**A payload kept in two parts.** A user who engraves a backup on steel wants
+to engrave little. Only the signing share and $\mathsf{sk}$ have to be kept as
+secrets, and each has the size that a mnemonic of 24 words holds. The rest of
+a payload and of its items is not secret, and every member holds almost the
+same. A wallet can keep the two secrets apart from the rest without a new
+format: [Keeping the secret fields apart] says how, and what a
+party learns from each part.
+
+**Telling the forms apart.** The first byte of an envelope, $\mathtt{0x8A}$,
+is not printable ASCII and not a Bech32m character, and no UTF-8 text starts
+with it. A string starts with `zkfrost1`. A payload starts with
+$\mathtt{0x01}$ or $\mathtt{0x02}$. A decoder therefore tells them apart from
+the first bytes, without being told which one it was given.
+
+**Wrapper 0x00.** An unencrypted payload without items needs no envelope:
+the payload bytes or the string carry it. Wrapper $\mathtt{0x00}$ carries a
+payload with its items in the clear, and lets a wallet that reads envelopes
+take an unencrypted backup and an encrypted one through the same header.
+
+**Items sit in the envelope.** Items are kept out of the payload for three
+reasons. Nothing deployed or being built against the version 2 text of
+zcash/zips#1413 changes: its payload, its seven decoding rules, its restore
+steps and its test vectors stand as they are, and a decoder of that text
+never sees an item. A string decoder never sees one either, since a string
+holds a payload and nothing else. And long data never suited Bech32m: a group
+commitment and a wallet's items can reach several kilobytes, which is
+thousands of characters, while the Bech32m checksum is designed for strings
+of at most 90 characters [^zip-0173] [^bip-0350], and nobody copies a string
+of that length by hand. The envelope is bytes, which a file or a QR code
+holds directly. The group commitment is the first item: a member restored
+without help needs it to check its own signing share, and to compute the
+other members' verifying shares, without asking another member (see
+[Group commitment]).
+
+**Items instead of new versions.** A new format version stops every older
+wallet from restoring. Most additions do not need that: a wallet that ignores
+the group commitment or another wallet's data still restores the member. An
+item is skipped by a decoder that does not know it, so such data is added
+without a new version. A change that an older wallet must not ignore still
+takes a new format version. Strict typecode order and one item per typecode
+keep one encoding per envelope. ZIP 316 treats the items of a unified address
+or viewing key the same way: ascending typecode order, no typecode twice, and
+unknown items ignored [^zip-0316].
+
+**Registered and private-use typecodes.** A wallet can have data of its own
+to put in a backup. Without a place for it, each wallet would wrap the payload in a format of its own, and backups
+would stop being portable. A registered range gives a wallet typecodes that
+no one else uses, at the cost of one line in this ZIP; the layout stays in
+that wallet's specification, because no other wallet reads it. The
+private-use range needs no registration and so can collide, which is why its
+values start with a tag. ZIP 316 has only the second kind: it reserves six
+typecodes ($\mathtt{0xFFFA}$ to $\mathtt{0xFFFF}$) for experiments made before
+a ZIP assigns a typecode [^zip-0316-experimental], and assigns every other
+typecode itself. It has no range registered to one wallet. This ZIP adds one
+because wallet-specific data is expected to stay in a backup for good, which
+an experiment is not.
+
+**The group commitment as the group's public data.** The $t$ points of the
+group commitment, one of which is $\mathsf{ak}$, determine the verifying share
+of every member, for any identifier, including a member added later under
+the same polynomial. Storing the verifying shares themselves takes $n$ points
+and the list of identifiers, and does not let a member check that they belong
+to one polynomial. The transcript of a distributed key generation proves
+more, but it is several times larger, its layout depends on the key
+generation protocol, and a group made by a trusted dealer has none.
+
+**Recognising a restored member.** A payload restores key material only. How
+the other members recognise the restored member, and let it back into their
+exchanges, depends on the transport of the wallet, which this ZIP does not
+specify. One way needs nothing beyond the payload: the restored member signs a
+challenge with its signing share, and the others verify the signature against
+that member's verifying share, which they compute from the group commitment.
+The group commitment is kept in every backup so that this way stays open.
+
+**A recovery code and no password hashing.** A memory-hard function makes each
+guess of a passphrase expensive. A recovery code is 128 random bits, so
+guessing it is out of reach without such a function, and leaving the function
+out keeps the restore fast on a phone. The cost is that the user keeps a code
+and cannot choose it. A passphrase needs a memory-hard function; it would be
+another wrapper id, which this ZIP does not define (see [Open issues]). The
+salt is in the key derivation so that a wallet which uses one recovery code
+for several groups gets one key for each.
+
+**The header is authenticated.** The associated data of wrapper
+$\mathtt{0x01}$ covers the magic, the container version, the wrapper id and
+the salt, so an envelope whose header was changed does not decrypt. The nonce
+is not in the associated data and does not need to be: it is an input of the
+cipher, so an envelope whose nonce was changed does not decrypt either.
 
 **Version 1 is Zkool's payload.** Backups users already made keep working,
 and the first implementation exists today.
@@ -364,7 +1334,41 @@ For the same reason, a string that is stored or sent encrypted only under
 public-key encryption based on discrete logarithms or on factoring is exposed
 to an adversary who records the ciphertext now and gains a quantum computer
 later. A passphrase with a memory-hard KDF and an AEAD (see [Open issues])
-does not have this weakness.
+does not have this weakness, and neither does wrapper $\mathtt{0x01}$, which
+uses no public-key encryption.
+
+The security of an envelope under wrapper $\mathtt{0x01}$ is that of its
+recovery code: whoever holds the envelope and the code holds the payload. The
+code has 128 bits of entropy, whatever the length of the key derived from it.
+A code that is not random, for instance one derived from a passphrase, would
+be open to guessing, since the key derivation is fast.
+
+Only a string has a checksum. The payload bytes have none, and neither has an
+envelope under wrapper $\mathtt{0x00}$. Damaged bytes can decode to a wrong
+share, which the group commitment item catches when the envelope carries one (see
+[Restore, version 2]). A wallet that stores an unencrypted payload outside a
+string has to protect its integrity itself.
+
+The group commitment item is not authenticated by anything outside the
+payload. The check in [Restore, version 2] catches a share and a commitment
+that do not match, which is what damage or a wrong sign produce. It does not
+catch a payload whose share and commitment were both replaced. A member that
+restores from a payload it did not keep itself has to compare the verifying
+shares it computes with those the other members hold.
+
+The same holds for every other field. A version 2 payload and its items carry
+no proof that the $\mathsf{sk}$, the $\mathsf{ak}$, the group commitment and
+the other items come from one key generation: whoever can write them can
+write a payload and items that pass every step of [Restore, version 2] for a
+group of their own making. An unencrypted payload, in any form, can be
+written by anyone. An envelope under wrapper $\mathtt{0x01}$ can be written
+only by a holder of the recovery code, so the encryption is also what
+authenticates the payload and its items.
+
+A backup made before a group's shares were replaced, by a refresh or a
+resharing, holds a share that no longer signs with the others. This ZIP does
+not detect it. The group does, when the restored member's share fails to
+verify.
 
 The restore does not prove the signing share (see [Restore]). A wrong share,
 for instance one exported with the wrong sign (see [Payload, version 1]),
@@ -381,8 +1385,9 @@ shows addresses that only that member can spend from. The wallet would not see
 the group's notes, and the group's signatures would not verify under that
 $\mathsf{ak}$, but funds received at those addresses before anyone notices are
 lost to the group. Checking the viewing key against a trusted source, as
-[Restore] asks, prevents this; so would carrying $\mathsf{ak}$ in the string
-(see [Open issues]).
+[Restore] asks, prevents this. A version 2 payload carries $\mathsf{ak}$, so
+its restore takes $\mathsf{ak}$ from the member's own backup and not from a
+viewing key obtained elsewhere.
 
 A member restored from a string has the same authority as before: the string
 adds no signer to the group. It carries no nonces, so a restore cannot bring
@@ -402,10 +1407,14 @@ This ZIP changes no consensus rule. Wallets can adopt it at any time.
   ZIP's owners, written from this ZIP's rules apart from Zkool's code, with
   `backup export` and `backup restore` commands [^frost-zec-backup].
 
+Both implement version 1.
 
 # Test vectors
 
-The test vectors are generated by the Python code proposed in
+This section has the test vectors of version 1, and then two of version 2
+(see [Test vectors for version 2]).
+
+The version 1 test vectors are generated by the Python code proposed in
 zcash/zcash-test-vectors#136 [^zcash-test-vectors-pr], in three files:
 `frost_member_backup`, `frost_member_backup_decoding` and
 `frost_member_backup_restore`.
@@ -417,6 +1426,17 @@ reject, two of them for the padding rule and one with a threshold of 1; and
 three cases that decode but that the restore must reject: a valid string
 paired with another group's viewing key, a string whose signing share is not
 canonical, and a viewing key with no Orchard component.
+
+One of the seventeen strings predates version 2 and has to be replaced (see
+[Open issues]). It is a valid version 1 payload whose first byte was changed
+to $\mathtt{0x02}$, to be rejected for its format version:
+
+    zkfrost1qgqsyqev42j6ml9d3tqthrzsmndmc854fqjmuspljl6yhswkc4p7zh208vjv7y78y36c3psy3czcxn2apfjya8ywz4whuzav8uj4s6mv4gguxtl2y2v
+
+A decoder of this ZIP reads it as a version 2 payload. It still rejects it,
+but at rule 4 of [Decoding], for the byte $\mathtt{0x02}$ where a version 2
+payload has its network and the byte $\mathtt{0xAA}$ where it has its
+identifier form.
 
 Every valid string decodes to the same fields and matches the stated
 derivation with Zkool's code, and every $t$-subset of members restored from
@@ -447,55 +1467,63 @@ One member of the 2-of-3 ZIP 2005 group (byte strings in hex):
     ufvk    uview1mvknnjr2s9cuc7z5kjsd3twesswde37tpfw2z4v5a8jmsnwdwsg8sc2hdq302ud7j57d7dvmmt6mtc6c3fk7zkdyx5mrhq8fvyw8xp0dlgzl8kkwawt9j7m9z5adwpuskfscg5fyrpc0sca8lydtxfw7hfaaydtg88ayqj6y89a9jllhupn3hzgp7vq6d
 
 
+## Test vectors for version 2
+
+Provisional test vectors for key source $\mathtt{0x02}$ of the version 2
+payload are published with the version 2 text of zcash/zips#1413
+[^zips-1413-v2]. The two strings below add key sources $\mathtt{0x00}$ and
+$\mathtt{0x02}$ with the key material of the version 1 vectors. Byte strings
+are in hex.
+
+- A is the member quoted above: its $\mathsf{sk}$, $\mathsf{ak}$ and signing
+  share, with the birthday height 2700000.
+- B holds the raw Orchard full viewing key ($\mathsf{ak}$, $\mathsf{nk}$,
+  $\mathsf{rivk}$) of the 3-of-5 ZIP 2005 group of the version 1 vectors, and
+  the signing share of that group's member 1 under the identifier 256. It is
+  a vector of the encoding only: the share is not the share of the identifier
+  256, which no step of [Restore, version 2] notices when the wallet knows no
+  verifying share of the group.
+
+Test vectors for the envelope and the items will follow with an
+implementation.
+
+A. Version 2, key source $\mathtt{0x00}$, short identifier 1, 2-of-3, Mainnet, birthday
+height 2700000, as a string:
+
+    payload 020000020300012caaa5adfcad8ac0bb8c50dcdbbc1e954825be403f97f44bc1d6c543e15d4f3be032290024cf13c724758886048e05834d5d0a644e9c8e155d7e0bac3f25586b6caa11c3a0dffa5f21db1b2c6cc72d9b6af9d777884c2c7d3e06ad479732bec46cee110d
+    string  zkfrost1qgqqqqsrqqqje2494h72mzkqhwx9phxmhs0f2jp9heqrl9l5f0qad32ru9w57wlqxg5sqfx0z0rjgavgsczgupvrf4ws5ezwnj8p2ht7pwkr7f2cddk25ywr5r0l5hepmvdjcmx89kdk47whw7yyctra8cr263uhx2lvgm8wzyxsk7mugr
+
+B. Version 2, key source $\mathtt{0x02}$, full identifier 256, 3-of-5, Testnet, birthday
+height 0, as a string:
+
+    payload 0202010305010001000000000000000000000000000000000000000000000000000000000000564f68c2939b5efe65c64d7fe0322e7aaebd7377cace2dbaf5dd3994fc8adc2400000000ad41d8ea8eaf287da6792d386d19e5238f5270ae710802c012f1bbac99e113109e4098939d8c69ce2e246d921bb3d7252a42f9aed39c81245c10606e92eb2922e22aa26359b531bd3e0118a865c7f33d2dda5fd7e30d8497d3bb7bf10fb46325
+    string  zkfrost1qgpqzqc9qyqqzqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4j0drpf8x67lejuvntluqezu74wh4eh0jkw9ka0thfejn7g4hpyqqqqqq9dg8vw4r409p76v7fd8pk3nefr3af8ptn3pqpvqyh3hwkfncgnzz0ypxynnkxxnn3wy3keyxan6ujj5she4mfeeqfytsgxqm5jav5j9c325f34ndf3h5lqzx9gvhrlx0fdmf0a0ccdsjta8wmm7y8mgce9kskuxa
+
 # Open issues
 
-- **Identifier encoding.** frost-client's DKG derives identifiers as
-  `Identifier::derive(session_id || pubkey)`, and Zafe from the vault id and
-  the member's identity key, so groups created by either use full 32-byte
-  identifiers (frost-client's trusted dealer uses 1 to $n$). For their groups
-  to fit, a version 2 needs a type byte followed by a short or a full
-  identifier.
-- **Identifiers after a refresh.** Refreshing shares to remove a member keeps
-  the other members' identifiers [^frost-refresh], so a group can end up with
-  identifiers 1, 2 and 4 and $n = 3$. Version 1 rejects member 4 ($i > n$), so
-  it covers only groups whose identifiers are 1 to $n$, which is what Zkool
-  creates. A version 2 could drop that check: the restore can match the
-  identifier against the group's verifying shares when it knows them.
-- **Explicit derivation.** A version 2 could record the derivation, so a
-  restore does not depend on trying each one, and a third derivation could be
-  added without ambiguity.
-- **Groups with no $\mathsf{sk}$.** zcash-sign's `generate`, which Konclave
-  uses, derives $\mathsf{nk}$ and $\mathsf{rivk}$ from a random $\mathsf{sk}$
-  and then discards it, so version 1 cannot hold its groups. A version 2 could
-  record that $\mathsf{nk}$ and $\mathsf{rivk}$ come from the viewing key,
-  leave $\mathsf{sk}$ out, and carry the viewing key itself (next item).
-  Carrying only $\mathsf{ak}$, as first suggested in zcash/zips#1413, would let
-  the restore catch a viewing key from another group, but not a different
-  viewing key for the same group. Such groups are not quantum recoverable
-  under ZIP 2005.
-- **The viewing key in the string**, so that a restore needs only the string.
-  For a group with no $\mathsf{sk}$, the viewing key is the only source of
-  $\mathsf{nk}$ and $\mathsf{rivk}$. A version 2 would carry the raw 96-byte
-  Orchard full viewing key rather than its unified encoding, so that the
-  string stays network-agnostic. With the viewing key in the string, nothing
-  outside it is left to mismatch. For a group with $\mathsf{sk}$,
-  $\mathsf{ak}$ is enough, since $\mathsf{nk}$ and $\mathsf{rivk}$ follow from
-  $\mathsf{sk}$ and $\mathsf{ak}$. Either way, $\mathsf{ak}$ would then come
-  from the member's own backup rather than from a viewing key obtained
-  elsewhere (see [Security Considerations]). A string for a group with no
-  $\mathsf{sk}$ would be about 230 characters long, or 280 with a 32-byte
-  identifier (see [Rationale] on Bech32m).
-- **Birthday height in version 2.** A raw Orchard full viewing key does not
-  carry the birthday height that ZIP 316 allows in the unified encoding
-  [^zip-0316-birthday], so a string that restores on its own would need a birthday
-  field of its own, as Konclave noted in zcash/zips#1413. A height only means
-  something on one network, so the field would either name the network or
-  apply to the network the wallet restores on.
-- **Passphrase profile.** An optional version encrypting the payload with a
-  memory-hard KDF and an AEAD, as Zafe does for its backups.
+- **Passphrase wrapper.** A wrapper id that encrypts the contents under a
+  passphrase, with a memory-hard KDF and an AEAD, as Zafe does for its
+  backups. It needs a choice of KDF and of its parameters.
+- **The version 1 reject vector named "version 2".** One string of
+  `frost_member_backup_decoding` is a version 1 payload with the first byte
+  $\mathtt{0x02}$, expected to be rejected as an unsupported version (see
+  [Test vectors]). With version 2 defined, it is rejected for another reason,
+  its network and identifier form. It has to be replaced by a string whose format version
+  no version of this ZIP uses, such as $\mathtt{0x03}$, and the count of
+  rejected strings in [Test vectors] checked again.
+- **Integrity of an unencrypted envelope.** An envelope under wrapper
+  $\mathtt{0x00}$ has no checksum. Should it carry one?
+- **Items that a decoder has to understand.** Every item can be skipped. ZIP
+  316 reserves a range of typecodes that a consumer has to understand or else
+  reject the whole key [^zip-0316-metadata]. This ZIP has no such range: a
+  change that an older wallet must not ignore takes a new format version. Is
+  a range needed?
+- **Layout of a payload kept in two parts.** [Keeping the secret fields apart]
+  defines no layout for the remaining part, and no key derivation or cipher
+  for its encryption, so a split made by one wallet is put together again
+  only by that wallet. Should this ZIP define them?
 - **Human-readable part.** `zkfrost` is kept for compatibility with existing
   backups. Should a later version use a more neutral one?
-
 
 # References
 
@@ -505,17 +1533,51 @@ One member of the 2-of-3 ZIP 2005 group (byte strings in hex):
 
 [^protocol-updated-orchardkeycomponents]: [Zcash Protocol Specification, Version 2026.8.0 [NU6.3]. Section 4.2.3: Orchard Key Components](protocol/protocol.pdf#orchardkeycomponents)
 
+[^protocol-concretespendauthsig]: [Zcash Protocol Specification, Version 2026.8.0 [NU6.3]. Section 5.4.7.1: Spend Authorization Signature (Sapling and Orchard)](protocol/protocol.pdf#concretespendauthsig)
+
+[^protocol-pallasandvesta]: [Zcash Protocol Specification, Version 2026.8.0 [NU6.3]. Section 5.4.9.6: Pallas and Vesta](protocol/protocol.pdf#pallasandvesta)
+
+[^protocol-orchardfullviewingkeyencoding]: [Zcash Protocol Specification, Version 2026.8.0 [NU6.3]. Section 5.6.4.4: Orchard Raw Full Viewing Keys](protocol/protocol.pdf#orchardfullviewingkeyencoding)
+
+[^protocol-concreteblake2]: [Zcash Protocol Specification, Version 2026.8.0 [NU6.3]. Section 5.4.1.2: BLAKE2 Hash Functions](protocol/protocol.pdf#concreteblake2)
+
+[^protocol-spendauthsig]: [Zcash Protocol Specification, Version 2026.8.0 [NU6.3]. Section 4.15: Spend Authorization Signature (Sapling and Orchard)](protocol/protocol.pdf#spendauthsig)
+
 [^zip-0173]: [ZIP 173: Bech32 Format](zip-0173.rst)
+
+[^zips-1413-v2]: [zcash/zips#1413: the version 2 payload as revised on 2026-11-20 and 2026-11-21](https://github.com/zcash/zips/issues/1413#issuecomment-7068742989)
+
+[^zips-1413-v2-restore]: [zcash/zips#1413: the version 2 payload, decoding and restore of 2026-11-20](https://github.com/zcash/zips/issues/1413#issuecomment-7046243157)
 
 [^zip-0312]: [ZIP 312: FROST for Spend Authorization Multisignatures](zip-0312.rst)
 
 [^zip-0312-key-generation]: [ZIP 312: FROST for Spend Authorization Multisignatures — Key Generation](zip-0312.rst#key-generation)
 
+[^frost-vss]: [RFC 9591: The Flexible Round-Optimized Schnorr Threshold (FROST) Protocol for Two-Round Schnorr Signatures. Appendix C.2: Verifiable Secret Sharing](https://www.rfc-editor.org/rfc/rfc9591.html#name-verifiable-secret-sharing)
+
+[^cocktail-dkg-round2]: [COCKTAIL-DKG: Distributed Key Generation protocol for FROST. Round 2: Share Decryption and Verification](https://c2sp.org/cocktail-dkg)
+
 [^zip-0316]: [ZIP 316: Unified Addresses and Unified Viewing Keys](zip-0316.rst)
+
+[^zip-0316-experimental]: [ZIP 316: Unified Addresses and Unified Viewing Keys — Experimental Usage](zip-0316.rst#experimental-usage)
+
+[^zip-0316-metadata]: [ZIP 316: Unified Addresses and Unified Viewing Keys — Metadata Items](zip-0316.rst#metadata-items)
 
 [^zip-2005]: [ZIP 2005: Ironwood Quantum Recoverability](zip-2005.md)
 
 [^zip-2005-usagewithfrost]: [ZIP 2005: Ironwood Quantum Recoverability — Usage with FROST](zip-2005.md#usagewithfrost)
+
+[^zip-2005-threat-model]: [ZIP 2005: Ironwood Quantum Recoverability — Threat model](zip-2005.md#threatmodel)
+
+[^zip-2005-dlog-before]: [ZIP 2005: Ironwood Quantum Recoverability — Effects of discrete-logarithm-breaking attacks before the switch to the Recovery Protocol](zip-2005.md#effectsofdiscrete-logarithm-breakingattacksbeforetheswitchtotherecoveryprotocol)
+
+[^Bitcoin-CompactSize]: [Variable length integer. Bitcoin Wiki](https://en.bitcoin.it/wiki/Protocol_documentation#Variable_length_integer)
+
+[^xchacha]: [XChaCha: eXtended-nonce ChaCha and AEAD_XChaCha20_Poly1305. Internet-Draft draft-irtf-cfrg-xchacha-03](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-xchacha-03)
+
+[^crockford-base32]: [Douglas Crockford: Base 32](https://www.crockford.com/base32.html)
+
+[^bip-0039]: [BIP 39: Mnemonic code for generating deterministic keys](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki)
 
 [^bip-0350]: [BIP 350: Bech32m format for v1+ witness addresses](https://github.com/bitcoin/bips/blob/master/bip-0350.mediawiki)
 
