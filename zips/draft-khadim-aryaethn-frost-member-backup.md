@@ -1236,7 +1236,7 @@ A remaining part is the following bytes:
 | Size   | Field |
 |--------|-------|
 | 4      | magic: $\mathtt{0x8A}$ $\mathtt{0x5A}$ $\mathtt{0x46}$ $\mathtt{0x52}$ ($\mathtt{0x8A}$, then `ZFR` in ASCII) |
-| 1      | format version, $\mathtt{0x01}$ |
+| 1      | container version, $\mathtt{0x01}$ |
 | 1      | mode |
 | varies | mode parameters, fixed by the mode |
 | rest   | body |
@@ -1273,7 +1273,7 @@ key
 associated data
 
 : The 38 bytes of the remaining part that precede the nonce: the magic, the
-  format version, the mode and the salt.
+  container version, the mode and the salt.
 
 body
 
@@ -1298,8 +1298,8 @@ $\mathsf{sk}$ of a secret part. A reader MUST reject the remaining part if any
 of the following holds:
 
 - it does not start with the four magic bytes above;
-- it is shorter than 6 bytes, so that it has no format version or no mode;
-- the format version is not $\mathtt{0x01}$;
+- it is shorter than 6 bytes, so that it has no container version or no mode;
+- the container version is not $\mathtt{0x01}$;
 - the mode is neither $\mathtt{0x00}$ nor $\mathtt{0x01}$;
 - the mode is $\mathtt{0x01}$, and the remaining part is shorter than 78
   bytes or its body does not decrypt with the key derived from the given
@@ -1748,9 +1748,9 @@ are in hex.
   256, which no step of [Restore, version 2] notices when the wallet knows no
   verifying share of the group.
 
-Test vectors for the envelope under each wrapper, for the items, for a
-remaining part in each mode, and an example of a 256-bit recovery code will
-follow with an implementation.
+C and D below are envelopes, and E is a 256-bit recovery code. Test vectors
+for a remaining part in each mode, and for registered and private-use items,
+will follow with an implementation.
 
 A. Version 2, key source $\mathtt{0x00}$, short identifier 1, 2-of-3, Mainnet, birthday
 height 2700000, as a string:
@@ -1763,6 +1763,39 @@ height 0, as a string:
 
     payload 0202010305010001000000000000000000000000000000000000000000000000000000000000564f68c2939b5efe65c64d7fe0322e7aaebd7377cace2dbaf5dd3994fc8adc2400000000ad41d8ea8eaf287da6792d386d19e5238f5270ae710802c012f1bbac99e113109e4098939d8c69ce2e246d921bb3d7252a42f9aed39c81245c10606e92eb2922e22aa26359b531bd3e0118a865c7f33d2dda5fd7e30d8497d3bb7bf10fb46325
     string  zkfrost1qgpqzqc9qyqqzqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4j0drpf8x67lejuvntluqezu74wh4eh0jkw9ka0thfejn7g4hpyqqqqqq9dg8vw4r409p76v7fd8pk3nefr3af8ptn3pqpvqyh3hwkfncgnzz0ypxynnkxxnn3wy3keyxan6ujj5she4mfeeqfytsgxqm5jav5j9c325f34ndf3h5lqzx9gvhrlx0fdmf0a0ccdsjta8wmm7y8mgce9kskuxa
+
+C. The contents of vector A followed by the group commitment item of its
+group (typecode $\mathtt{0x01}$, length $\mathtt{0x20}$, then $\Phi_1$), in
+an envelope under wrapper $\mathtt{0x01}$, with the 128-bit recovery code of
+the example in [Recovery code]. The salt and the nonce are fixed for the
+vector; a real encoder draws them at random (see
+[Wrappers 0x01 and 0x02, recovery code]). The key is the one derived from the
+code and the salt.
+
+    contents 020000020300012caaa5adfcad8ac0bb8c50dcdbbc1e954825be403f97f44bc1d6c543e15d4f3be032290024cf13c724758886048e05834d5d0a644e9c8e155d7e0bac3f25586b6caa11c3a0dffa5f21db1b2c6cc72d9b6af9d777884c2c7d3e06ad479732bec46cee110d012064ceadd10b03febb88c8fa5d335519e092c81363bc61af7b4929ec25c01fdcab
+    code     0004-1061-050R-3GG2-8A1C-60T3-GF6
+    bytes    000102030405060708090a0b0c0d0e0f
+    salt     5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
+    nonce    010101010101010101010101010101010101010101010101
+    key      ca2d878470798047d7e1becbea03a177048a18f4f97a24420c17f3aa286bbb9c
+    envelope 8a5a464201015a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a010101010101010101010101010101010101010101010101df19a420a12c2f6f82a2f46c8d5d3581aa9b4dbac1d010df1afd7d7df5711bbd3ea589b4d445260845ab4eaffa0f2477c155d5192387bd8178c3688334a4aa2cf03a33d8bcc3022931d26ede94d230569edf509689e920428c6f836974ee63138eb811195d98d30e3a7e36d770a7aed4af2ca892b9d4a76756acc663552c1810f0c6f20df2ad0b140f5d0d5dc284082c62cf3713b0d84d310782d7817e
+    text     ilpGQgEBWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWloBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQHfGaQgoSwvb4Ki9GyNXTWBqptNusHQEN8a_X199XEbvT6libTURSYIRatOr_oPJHfBVdUZI4e9gXjDaIM0pKos8Doz2LzDAikx0m7elNIwVp7fUJaJ6SBCjG-DaXTuYxOOuBEZXZjTDjp-Ntdwp67UryyokrnUp2dWrMZjVSwYEPDG8g3yrQsUD10NXcKECCxizzcTsNhNMQeC14F-
+
+D. The same contents, salt and nonce under wrapper $\mathtt{0x02}$, with the
+256-bit recovery code of E:
+
+    code     0001-081G-8186-0W40-J2GB-1G6G-W3RG-2491-650N-2RBH-G68T-3CE1-T7GZ-2
+    bytes    000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+    key      df4ee69d1ef5f84152ab446f348e6ee525acfd316cdfafa5603ceb5b4e4afb57
+    envelope 8a5a464201025a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a010101010101010101010101010101010101010101010101433d38e7494496a0fa06dd7f2c46a3f9250c404262f472511e6bd35c8247cdbc45b240aeb57edd77f3569149709b19d6a31abc99bafc5a86566d0b1a1a924e68dcb0104069c2e19cec3be7f6497dbe199a0eded87e6a18d3c5383457b1395701e5b10622b8eb715474b3c53ed141f616b4d909581d34c2e3bc6686652c6197c327b28461916864592182e2421bbc1b8bd596dbaddd99b32d3c06f18fdd
+    text     ilpGQgECWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWloBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQFDPTjnSUSWoPoG3X8sRqP5JQxAQmL0clEea9NcgkfNvEWyQK61ft1381aRSXCbGdajGryZuvxahlZtCxoakk5o3LAQQGnC4ZzsO-f2SX2-GZoO3th-ahjTxTg0V7E5VwHlsQYiuOtxVHSzxT7RQfYWtNkJWB00wuO8ZoZlLGGXwyeyhGGRaGRZIYLiQhu8G4vVltut3ZmzLTwG8Y_d
+
+E. The 256-bit recovery code made of the bytes
+$\mathtt{0x00}, \mathtt{0x01}, \ldots, \mathtt{0x1F}$, written as
+[Recovery code] specifies:
+
+    bytes 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+    text  0001-081G-8186-0W40-J2GB-1G6G-W3RG-2491-650N-2RBH-G68T-3CE1-T7GZ-2
 
 # Open issues
 
