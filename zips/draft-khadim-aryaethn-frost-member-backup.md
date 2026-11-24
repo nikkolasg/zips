@@ -175,6 +175,10 @@ anyone who sees two such envelopes learns that they belong to the same group,
 and anyone who knows the group's value recognises its envelopes. A random salt
 shows nothing.
 
+A remaining part kept in the clear shows the fields that
+[Keeping the secret fields apart] lists. An encrypted
+remaining part shows nothing but its length, since its salt is random.
+
 A wallet that shows the string as a QR code exposes it to cameras and
 onlookers, as with any secret displayed on screen.
 
@@ -261,6 +265,10 @@ one when it wants what that encoding gives:
 - an envelope, defined in [Envelope]: bytes that hold a payload, in the clear
   or encrypted under a recovery code, and after a version 2 payload, zero or
   more items (see [Items]).
+
+It also defines a way to keep a version 2 payload and its items in two parts,
+one of which holds the two secret fields, in [Keeping the secret fields apart].
+It is optional as well.
 
 An encoder that writes a member backup string or an envelope, and a decoder
 that reads one, MUST follow the rules of that encoding.
@@ -719,7 +727,10 @@ A decoder that takes more than one of these forms from one input tells them
 apart by the first bytes. An envelope starts with the four magic bytes, and
 the text of an envelope with `ilpGQgE` (see [Envelope]). A member backup
 string starts with `zkfrost1` or `ZKFROST1` in ASCII. A payload starts with
-its format version, $\mathtt{0x01}$ or $\mathtt{0x02}$.
+its format version, $\mathtt{0x01}$ or $\mathtt{0x02}$. A remaining part,
+which is not a form of a payload and is read only together with a secret part,
+starts with its own four magic bytes, and its text with `ilpGUgE` (see
+[Format of the remaining part]).
 
 A decoder parses a payload in two steps:
 
@@ -916,7 +927,8 @@ that this ZIP rejects:
 - whether it restores a payload that came without a group commitment item,
   whose signing share step 5 does not check against a commitment;
 - which forms of a payload it reads: the payload bytes, a member backup
-  string, an envelope under any of the wrappers, or a container of its own;
+  string, an envelope under any of the wrappers, a payload kept in two parts
+  (see [Keeping the secret fields apart]), or a container of its own;
 - what it requires of the registered and private-use items that it knows,
   under their own specification, including how their content has to agree
   with the payload.
@@ -970,8 +982,10 @@ encryption, X25519, or RSA and elliptic-curve OpenPGP keys.
 
 A wallet does not have to keep a backup in one place. This section describes
 one way to keep it in two. It is a way to store a payload and its items, which
-is the wallet's choice (see [Encoding]): it defines no new format, and it adds
-no rule for a decoder. Its rules bind only a wallet that offers it.
+is the wallet's choice (see [Encoding]), and its rules bind only a wallet that
+offers it. It defines how the remaining part is written (see
+[Format of the remaining part]), so that a split made by one wallet is put
+together again by another.
 
 The section applies to a version 2 payload whose key source is
 $\mathtt{0x00}$ or $\mathtt{0x01}$, with the items that an envelope would
@@ -984,16 +998,18 @@ commitment.
 
 In this section:
 
-- the *secret part* of a payload is its signing share and its $\mathsf{sk}$;
-- the *remaining part* is every other byte of the payload, followed by the
-  items.
+- the *secret part* of a payload is its signing share and its $\mathsf{sk}$,
+  32 bytes each, as they are encoded in the payload;
+- the *remaining part* is every other byte of the payload, in the order that
+  the payload has them, followed by the items encoded as in [Items], written
+  as [Format of the remaining part] specifies.
 
 A user keeps the secret part on a medium that lasts and that the user guards,
 such as a steel plate. The user keeps the remaining part on a medium that is
 easier to copy and less guarded: paper, a printed QR code, a cloud drive. To
 restore, the wallet takes both parts, puts the payload and its items together
 again, and decodes and restores them as the contents of an envelope (see
-[Decoding] and [Restore, version 2]).
+[Format of the remaining part], [Decoding] and [Restore, version 2]).
 
 Each secret is 32 bytes, which is what a BIP 39 mnemonic of 24 words encodes:
 256 bits, followed by a checksum of 8 bits [^bip-0039]. Two such mnemonics
@@ -1022,8 +1038,11 @@ A wallet that offers this split:
   $\mathsf{sk}$, and that neither is the seed of a wallet;
 - SHOULD keep the group commitment item in the remaining part, so that step 5 of
   [Restore, version 2] checks a signing share that was copied by hand;
+- MUST write and read the remaining part as [Format of the remaining part]
+  specifies;
 - SHOULD encrypt the remaining part under a key derived from the secret part,
-  as described below;
+  that is write it with mode $\mathtt{0x01}$ of
+  [Format of the remaining part];
 - SHOULD tell the user that the secret part does not restore the member
   without the remaining part.
 
@@ -1107,8 +1126,10 @@ party that also holds $\mathsf{sk}$, such as another member, can, and this is
 the attack that [Security Considerations] describes for a viewing key
 obtained elsewhere. A party without $\mathsf{sk}$ cannot, and the funds are
 then out of reach of both. The encryption described below prevents the
-change. Without it, a wallet SHOULD check the restored viewing key against a
-source the member trusts, as [Restore] asks, before it shows an address.
+change by any party that does not hold both this member's signing share and
+$\mathsf{sk}$: another member holds $\mathsf{sk}$ but not this share. Without
+it, a wallet SHOULD check the restored viewing key against a source the member
+trusts, as [Restore] asks, before it shows an address.
 
 **What the secret part gives.** A party that finds the secret part, without
 the remaining part, holds one signing share and $\mathsf{sk}$.
@@ -1140,29 +1161,34 @@ another viewing key and shows another address.
 
 **Encrypting the remaining part.** A wallet that offers the split SHOULD
 encrypt the remaining part under a key derived from the secret part: a hash of
-the signing share followed by $\mathsf{sk}$, with a domain separation that the
-wallet uses for nothing else, as the key of an authenticated cipher. A wrong
-$\mathsf{sk}$ fails no step of [Restore, version 2], and this encryption is
-what detects it. It costs the user nothing, because whoever restores the
-member holds both secrets and needs no other code. It gives the following:
+the signing share followed by $\mathsf{sk}$, with a domain separation of its
+own, as the key of an authenticated cipher (see
+[Format of the remaining part]). A wrong $\mathsf{sk}$ fails no step of
+[Restore, version 2], and this encryption is what detects it. It costs the
+user nothing, because whoever restores the member holds both secrets and needs
+no other code. It gives the following:
 
 - the remaining part found alone is opaque: its finder learns none of the
   fields above, and an adversary that computes discrete logarithms finds no
   public key in it. The cipher is symmetric, so recording the ciphertext
   today gives nothing later;
-- the remaining part is authenticated: a changed one does not decrypt;
+- the remaining part is authenticated: a changed one does not decrypt, and
+  only a party that holds both secrets of this member can write one that
+  decrypts;
 - a secret copied with an error is detected, the signing share and
-  $\mathsf{sk}$ alike: the remaining part does not decrypt.
+  $\mathsf{sk}$ alike, and so are the two secrets given in the wrong order and
+  the secret part of another member: the remaining part does not decrypt.
+
+It does not protect the secret part. The secret part is the key: whoever holds
+it opens the remaining part, and also writes one that the wallet accepts. The
+secret part is what the user keeps apart and guards.
 
 This is not the envelope of [Envelope]. Wrappers $\mathtt{0x01}$ and
 $\mathtt{0x02}$ encrypt a whole payload, its secrets included, under a
 recovery code, which is one more secret for the user to keep. Here the key
 comes from the secrets that the user already keeps, and the secrets are not in
-what is encrypted.
-
-This ZIP does not define the layout of the remaining part, in the clear or
-encrypted (see [Open issues]). Two wallets exchange a payload or an envelope,
-not its parts.
+what is encrypted. The cipher, the hash and the layout of the header are those
+of the envelope's wrappers, so a wallet implements one construction for both.
 
 **If the remaining part is lost.** The secret part alone does not restore the
 member. The network, the threshold, the group size, $\mathsf{ak}$ and the
@@ -1179,6 +1205,138 @@ Values supplied by another member are trusted as much as a viewing key
 obtained from another member: a dishonest member can supply an $\mathsf{ak}$
 and a group commitment of its own making, as described above. The checks that
 [Restore] asks for before showing an address apply.
+
+#### Format of the remaining part
+
+The *plaintext* of a remaining part is the following bytes, where $\ell$ is
+the length of the member identifier field, 1 in the short form and 32 in the
+full form:
+
+| Field | Size | Offset, short | Offset, full |
+|-------|------|---------------|--------------|
+| format version, $\mathtt{0x02}$ | 1 | 0 | 0 |
+| key source, $\mathtt{0x00}$ or $\mathtt{0x01}$ | 1 | 1 | 1 |
+| network | 1 | 2 | 2 |
+| threshold $t$ | 1 | 3 | 3 |
+| group size $n$ | 1 | 4 | 4 |
+| identifier form | 1 | 5 | 5 |
+| identifier | $\ell$ | 6 | 6 |
+| birthday height | 4 | 7 | 38 |
+| $\mathsf{ak}$ | 32 | 11 | 42 |
+| items | rest | 43 | 74 |
+
+These are the fields of the payload as [Payload, version 2] defines them, in
+the same order, without the signing share and $\mathsf{sk}$. The payload part
+of the plaintext is $42 + \ell$ bytes: 43 in the short form, 74 in the full
+form. The items follow it, encoded as in [Items], and take all the remaining
+bytes; there can be none.
+
+A remaining part is the following bytes:
+
+| Size   | Field |
+|--------|-------|
+| 4      | magic: $\mathtt{0x8A}$ $\mathtt{0x5A}$ $\mathtt{0x46}$ $\mathtt{0x52}$ ($\mathtt{0x8A}$, then `ZFR` in ASCII) |
+| 1      | format version, $\mathtt{0x01}$ |
+| 1      | mode |
+| varies | mode parameters, fixed by the mode |
+| rest   | body |
+
+| Mode | Meaning | Mode parameters | Body |
+|------|---------|-----------------|------|
+| $\mathtt{0x00}$ | in the clear | none | the plaintext |
+| $\mathtt{0x01}$ | encrypted under the secret part | salt (32 bytes), then nonce (24 bytes) | the encrypted plaintext, 16 bytes longer than the plaintext |
+| other | unassigned | | |
+
+Under mode $\mathtt{0x01}$, the plaintext is encrypted with XChaCha20-Poly1305
+[^xchacha], as for wrappers $\mathtt{0x01}$ and $\mathtt{0x02}$ (see
+[Wrappers 0x01 and 0x02, recovery code]), with the following values:
+
+salt
+
+: 32 bytes, stored in the clear. An encoder MUST draw them from a
+  cryptographic random number generator for each remaining part it writes.
+
+nonce
+
+: 24 bytes. An encoder MUST draw them from a cryptographic random number
+  generator for each remaining part it writes.
+
+key
+
+: $\mathsf{BLAKE2b\text{-}256}(\texttt{"ZcashFROSTRemain"},\, \mathsf{share} \,\|\, \mathsf{sk} \,\|\, \mathsf{salt})$,
+  that is BLAKE2b [^protocol-concreteblake2] with a 32-byte output, the
+  16-byte personalization `ZcashFROSTRemain`, no key and no salt parameter,
+  applied to the 96 bytes $\mathsf{share} \,\|\, \mathsf{sk} \,\|\, \mathsf{salt}$,
+  where $\mathsf{share}$ and $\mathsf{sk}$ are the 32-byte fields of the secret
+  part as the payload encodes them.
+
+associated data
+
+: The 38 bytes of the remaining part that precede the nonce: the magic, the
+  format version, the mode and the salt.
+
+body
+
+: The XChaCha20-Poly1305 encryption of the plaintext under the key, the nonce
+  and the associated data: the ciphertext, as long as the plaintext, followed
+  by the 16-byte tag.
+
+The personalization differs from that of the wrappers, so a key derived for a
+remaining part is never the key of an envelope.
+
+A remaining part written as text follows the rules of the text of an envelope
+(see [Envelope]): an encoder writes the base64url encoding of its bytes without
+padding, and a reader ignores whitespace and accepts either base64 alphabet,
+with or without padding. Its text starts with `ilpGUgE` (`ilpGUgEA` under mode
+$\mathtt{0x00}$, `ilpGUgEB` under mode $\mathtt{0x01}$). Its first byte,
+$\mathtt{0x8A}$, is not the first byte of a payload or of a member backup
+string, and its fourth byte, $\mathtt{0x52}$, is not that of an envelope
+($\mathtt{0x42}$), so a reader tells it from each of these by its first bytes.
+
+The input of a reader is a remaining part, and the signing share and
+$\mathsf{sk}$ of a secret part. A reader MUST reject the remaining part if any
+of the following holds:
+
+- it does not start with the four magic bytes above;
+- it is shorter than 6 bytes, so that it has no format version or no mode;
+- the format version is not $\mathtt{0x01}$;
+- the mode is neither $\mathtt{0x00}$ nor $\mathtt{0x01}$;
+- the mode is $\mathtt{0x01}$, and the remaining part is shorter than 78
+  bytes or its body does not decrypt with the key derived from the given
+  signing share and $\mathsf{sk}$, and the nonce and associated data above;
+- the plaintext is shorter than 6 bytes, or its format version is not
+  $\mathtt{0x02}$, its key source is neither $\mathtt{0x00}$ nor
+  $\mathtt{0x01}$, or its identifier form is neither $\mathtt{0x00}$ nor
+  $\mathtt{0x01}$;
+- the plaintext is shorter than $42 + \ell$ bytes.
+
+The plaintext is the body under mode $\mathtt{0x00}$, and the decrypted body
+under mode $\mathtt{0x01}$. The reader then puts the payload and its items
+together again. They are, in this order:
+
+1. the first $6 + \ell$ bytes of the plaintext, up to and including the
+   member identifier;
+2. the signing share of the secret part;
+3. the next 4 bytes of the plaintext, the birthday height;
+4. $\mathsf{sk}$ of the secret part;
+5. the next 32 bytes of the plaintext, $\mathsf{ak}$;
+6. the rest of the plaintext, the items.
+
+These bytes are the contents of an envelope: the wallet decodes them as
+[Decoding] specifies for the contents of an envelope, and restores the member
+under [Restore, version 2]. A payload or an item that fails there is rejected
+as it would be in an envelope.
+
+Under mode $\mathtt{0x01}$, a body that does not decrypt means that the secret
+part given is not the one that the remaining part was written with, or that
+the remaining part was changed or damaged. A signing share or an $\mathsf{sk}$
+copied with an error, the two given in the wrong order, and the secret part of
+another member of the group all give another key. The reader cannot tell
+these cases apart, and restores nothing. Under mode $\mathtt{0x00}$ nothing
+checks the remaining part or the secret part against each other before
+[Restore, version 2], which catches a wrong signing share at step 5 when the
+remaining part holds a group commitment item, and does not catch a wrong
+$\mathsf{sk}$.
 
 
 # Rationale
@@ -1279,9 +1437,25 @@ under a recovery code, do it in one way.
 to engrave little. Only the signing share and $\mathsf{sk}$ have to be kept as
 secrets, and each has the size that a mnemonic of 24 words holds. The rest of
 a payload and of its items is not secret, and every member holds almost the
-same. A wallet can keep the two secrets apart from the rest without a new
-format: [Keeping the secret fields apart] says how, and what a
-party learns from each part.
+same. [Keeping the secret fields apart] says how a wallet keeps the two
+secrets apart from the rest, how the rest is written, and what a party learns
+from each part.
+
+**The remaining part encrypted under the secret part.** The key of the
+remaining part is derived from the two secrets and not from a code of its
+own. A separate code would be a third secret for the user to keep, and losing
+it would lose the remaining part. The secrets are already kept, and whoever
+restores holds them. Deriving the key from both secrets also makes the
+encryption a check of the secret part: an $\mathsf{sk}$ copied with an error
+passes every step of [Restore, version 2], and fails here. The remaining part
+has its own magic rather than a wrapper id of the envelope, because an
+envelope opens with its recovery code alone, while a remaining part is read
+only with a secret part and holds no payload until the two are put together.
+The construction is otherwise that of the envelope's wrappers, with a
+personalization of its own, so a wallet implements one cipher and one key
+derivation. The salt is not needed for the key to be unique, since the
+signing share differs for each member; it is kept so that the header has the
+layout of the wrappers' header.
 
 **Telling the forms apart.** A decoder can be given three kinds of input: a
 string, which starts with `zkfrost1`; the bytes of an envelope, whose first
@@ -1291,7 +1465,11 @@ with `ilpGQgE`. The bytes of a payload start with $\mathtt{0x01}$ or
 $\mathtt{0x02}$. A decoder therefore tells them apart from the first bytes,
 without being told which one it was given. The text of an envelope needs no
 prefix of its own: the magic already identifies it, and an encrypted envelope
-detects damage when it is opened.
+detects damage when it is opened. A remaining part is not a fourth kind of
+input of a decoder, since it is read only with a secret part, but it is told
+apart the same way: its magic, $\mathtt{0x8A}$ then `ZFR`, differs from the
+envelope's in its fourth byte, so its text starts with `ilpGUgE` and not
+`ilpGQgE`.
 
 **Wrapper 0x00.** An unencrypted payload without items needs no envelope:
 the payload bytes or the string carry it. Wrapper $\mathtt{0x00}$ carries a
@@ -1424,7 +1602,16 @@ Only a string has a checksum. The payload bytes have none, and neither has an
 envelope under wrapper $\mathtt{0x00}$. Damaged bytes can decode to a wrong
 share, which the group commitment item catches when the envelope carries one (see
 [Restore, version 2]). A wallet that stores an unencrypted payload outside a
-string has to protect its integrity itself.
+string has to protect its integrity itself. A remaining part in the clear has
+no checksum either.
+
+A remaining part encrypted under the secret part is as hard to open or to
+forge as the secret part is to guess: the key is derived from a signing share
+and $\mathsf{sk}$, 64 bytes, of which the signing share is known only to the
+member. Every other member holds $\mathsf{sk}$, so against them the key rests
+on the signing share alone. The encryption gives the secret part itself no
+protection: a party that holds it opens the remaining part, writes a new one,
+and holds what [Storage and transmission] says a payload gives.
 
 The group commitment item is not authenticated by anything outside the
 payload. The check in [Restore, version 2] catches a share and a commitment
@@ -1561,8 +1748,9 @@ are in hex.
   256, which no step of [Restore, version 2] notices when the wallet knows no
   verifying share of the group.
 
-Test vectors for the envelope under each wrapper, for the items, and an
-example of a 256-bit recovery code will follow with an implementation.
+Test vectors for the envelope under each wrapper, for the items, for a
+remaining part in each mode, and an example of a 256-bit recovery code will
+follow with an implementation.
 
 A. Version 2, key source $\mathtt{0x00}$, short identifier 1, 2-of-3, Mainnet, birthday
 height 2700000, as a string:
@@ -1589,17 +1777,13 @@ height 0, as a string:
   no version of this ZIP uses, such as $\mathtt{0x03}$, and the count of
   rejected strings in [Test vectors] checked again.
 - **Integrity of an unencrypted envelope.** An envelope under wrapper
-  $\mathtt{0x00}$ has no checksum, and neither has its text form. Should it
-  carry one?
+  $\mathtt{0x00}$ has no checksum, and neither has its text form, nor a
+  remaining part in the clear. Should they carry one?
 - **Items that a decoder has to understand.** Every item can be skipped. ZIP
   316 reserves a range of typecodes that a consumer has to understand or else
   reject the whole key [^zip-0316-metadata]. This ZIP has no such range: a
   change that an older wallet must not ignore takes a new format version. Is
   a range needed?
-- **Layout of a payload kept in two parts.** [Keeping the secret fields apart]
-  defines no layout for the remaining part, and no key derivation or cipher
-  for its encryption, so a split made by one wallet is put together again
-  only by that wallet. Should this ZIP define them?
 - **Human-readable part.** `zkfrost` is kept for compatibility with existing
   backups. Should a later version use a more neutral one?
 
