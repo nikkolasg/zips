@@ -169,10 +169,11 @@ group: the group commitment gives every member's verifying share, and a
 registered item holds what its registrant's specification defines. All of
 this is as private as the payload that they come with.
 
-An envelope under wrapper $\mathtt{0x01}$ hides its payload, but shows its
-salt. When the salt is a value fixed for the group, anyone who sees two such
-envelopes learns that they belong to the same group, and anyone who knows the
-group's value recognises its envelopes. A random salt shows nothing.
+An envelope under wrapper $\mathtt{0x01}$ or $\mathtt{0x02}$ hides its
+payload, but shows its salt. When the salt is a value fixed for the group,
+anyone who sees two such envelopes learns that they belong to the same group,
+and anyone who knows the group's value recognises its envelopes. A random salt
+shows nothing.
 
 A wallet that shows the string as a QR code exposes it to cameras and
 onlookers, as with any secret displayed on screen.
@@ -394,12 +395,13 @@ holds them:
 | Wrapper id | Wrapper | Wrapper parameters | Body |
 |------------|---------|--------------------|------|
 | $\mathtt{0x00}$ | none | none | the contents |
-| $\mathtt{0x01}$ | recovery code | salt (32 bytes), then nonce (24 bytes) | the encrypted contents, 16 bytes longer than the contents |
+| $\mathtt{0x01}$ | 128-bit recovery code | salt (32 bytes), then nonce (24 bytes) | the encrypted contents, 16 bytes longer than the contents |
+| $\mathtt{0x02}$ | 256-bit recovery code | salt (32 bytes), then nonce (24 bytes) | the encrypted contents, 16 bytes longer than the contents |
 | other      | unassigned | | |
 
-Under wrapper $\mathtt{0x01}$ the payload and its items are encrypted
-together. Wrapper $\mathtt{0x00}$ carries a payload and its items in the
-clear (see [Rationale]).
+Under wrappers $\mathtt{0x01}$ and $\mathtt{0x02}$ the payload and its items
+are encrypted together. Wrapper $\mathtt{0x00}$ carries a payload and its
+items in the clear (see [Rationale]).
 
 An envelope is bytes. An encoder that writes an envelope as text MUST write
 the base64url encoding (RFC 4648, section 5 [^rfc4648-base64url]) of the
@@ -413,45 +415,65 @@ neither a member backup string nor the base64 of an envelope.
 Every envelope starts with the bytes $\mathtt{0x8A}$ $\mathtt{0x5A}$
 $\mathtt{0x46}$ $\mathtt{0x42}$ $\mathtt{0x01}$, so its text starts with
 `ilpGQgE` (`ilpGQgEA` under wrapper $\mathtt{0x00}$, `ilpGQgEB` under wrapper
-$\mathtt{0x01}$), which no member backup string starts with.
+$\mathtt{0x01}$, `ilpGQgEC` under wrapper $\mathtt{0x02}$), which no member
+backup string starts with.
 
 ### Recovery code
 
-A recovery code is 128 bits. An encoder MUST draw them from a cryptographic
+A recovery code is 128 bits for wrapper $\mathtt{0x01}$ and 256 bits for
+wrapper $\mathtt{0x02}$. An encoder MUST draw them from a cryptographic
 random number generator. It MUST NOT derive them from a passphrase, or let the
-user choose them. Below, $\mathsf{code}$ is the recovery code as 16 bytes.
+user choose them. Below, $\mathsf{code}$ is the recovery code as 16 bytes for
+wrapper $\mathtt{0x01}$ and as 32 bytes for wrapper $\mathtt{0x02}$.
 
-A wallet shows a recovery code to its user as text:
+The two wrappers differ only in the length of the code. The wallet chooses
+one. Wrapper $\mathtt{0x01}$ is for a code that the user writes down by hand.
+Wrapper $\mathtt{0x02}$ is for a backup meant to resist a quantum adversary
+for as long as the backup holds $\mathsf{sk}$: with Grover's algorithm, such an
+adversary finds a 128-bit code in about $2^{64}$ evaluations, and a 256-bit
+code in about $2^{128}$ (see [Security Considerations]). A wallet that reads an
+envelope learns from its wrapper id which length the code has.
 
-1. Read $\mathsf{code}$ as one 128-bit integer $c$, in big-endian order.
-2. Write $c$ as 26 symbols of Crockford's Base32 alphabet
+A wallet shows a recovery code to its user as text. Let $L$ be the length of
+the code in bits, and $m$ the number of its data symbols: $m = 26$ when
+$L = 128$, and $m = 52$ when $L = 256$.
+
+1. Read $\mathsf{code}$ as one $L$-bit integer $c$, in big-endian order.
+2. Write $c$ as $m$ symbols of Crockford's Base32 alphabet
    `0123456789ABCDEFGHJKMNPQRSTVWXYZ` [^crockford-base32], most significant
-   first. A symbol holds 5 bits, so the first symbol is at most `7`.
+   first. A symbol holds 5 bits, so the first symbol is at most `7` when
+   $L = 128$, and at most `1` when $L = 256$.
 3. Append one check symbol, the symbol of value $c \bmod 37$ in the alphabet
    `0123456789ABCDEFGHJKMNPQRSTVWXYZ*~$=U`.
-4. Write these 27 symbols in groups of four separated by `-`; the last group
-   has three symbols.
+4. Write these $m + 1$ symbols in groups of four separated by `-`; the last
+   group has the symbols that remain. A 128-bit code is 27 symbols, whose last
+   group has three. A 256-bit code is 53 symbols, whose last group has one.
 
-For example, the bytes $\mathtt{0x00}, \mathtt{0x01}, \ldots, \mathtt{0x0F}$
-give `0004-1061-050R-3GG2-8A1C-60T3-GF6`.
+For example, the 128-bit code made of the bytes
+$\mathtt{0x00}, \mathtt{0x01}, \ldots, \mathtt{0x0F}$ gives
+`0004-1061-050R-3GG2-8A1C-60T3-GF6`.
 
 A wallet that reads a recovery code MUST ignore `-` and spaces, MUST ignore
-case, and MUST read `I` and `L` as `1` and `O` as `0`. It MUST reject the text
-if any of the following holds:
+case, and MUST read `I` and `L` as `1` and `O` as `0`. It knows $L$ from the
+wrapper id of the envelope that the code opens. It MUST reject the text if any
+of the following holds:
 
-- it does not have exactly 27 symbols;
-- one of the first 26 symbols is not in the 32-symbol alphabet;
+- it does not have exactly $m + 1$ symbols;
+- one of the first $m$ symbols is not in the 32-symbol alphabet;
 - the last symbol is not in the 37-symbol alphabet;
-- the first symbol is above `7`;
-- the check symbol is not the one computed from the first 26 symbols.
+- the first symbol is above `7` when $L = 128$, or above `1` when $L = 256$;
+- the check symbol is not the one computed from the first $m$ symbols.
 
 The check symbol catches one wrong symbol, and two different neighbouring
 symbols written in the other order, before any decryption is tried.
 
-### Wrapper 0x01, recovery code
+### Wrappers 0x01 and 0x02, recovery code
 
 The contents are encrypted with XChaCha20-Poly1305 [^xchacha] under a key
-derived from a recovery code.
+derived from a recovery code. Wrappers $\mathtt{0x01}$ and $\mathtt{0x02}$ use
+the same construction, described below. They differ only in the length of the
+code: 16 bytes for wrapper $\mathtt{0x01}$, 32 bytes for wrapper
+$\mathtt{0x02}$ (see [Recovery code]).
 
 salt
 
@@ -471,7 +493,8 @@ key
 : $\mathsf{BLAKE2b\text{-}256}(\texttt{"ZcashFROSTBackup"},\, \mathsf{code} \,\|\, \mathsf{salt})$,
   that is BLAKE2b [^protocol-concreteblake2] with a 32-byte output, the
   16-byte personalization `ZcashFROSTBackup`, no key and no salt parameter,
-  applied to the 48 bytes $\mathsf{code} \,\|\, \mathsf{salt}$.
+  applied to $\mathsf{code} \,\|\, \mathsf{salt}$: 48 bytes for wrapper
+  $\mathtt{0x01}$, 64 bytes for wrapper $\mathtt{0x02}$.
 
 associated data
 
@@ -484,8 +507,8 @@ body
   items) under the key, the nonce and the associated data: the ciphertext, as
   long as the contents, followed by the 16-byte tag.
 
-No password hashing function is applied, because the recovery code is 128
-random bits and not a passphrase.
+No password hashing function is applied, because the recovery code is 128 or
+256 random bits and not a passphrase.
 
 ## Items
 
@@ -563,6 +586,16 @@ commitment points that the participants of a distributed key generation
 exchange are from before the step, so an encoder that computes the group
 commitment from them MUST negate every $\Phi_k$ when the step negated the
 shares.
+
+What key generation returns does not say whether the step negated the shares:
+the step has already been applied to its output. The `reddsa` crate's
+`dkg::part3`, for instance, returns a group verifying key on which
+`has_even_y()` is always true, whether or not the round 1 commitments need
+negating. An encoder that computes the group commitment from the round 1
+commitments finds out by comparing the sum of their constant terms, $\Phi_0$
+from before the step, with the point that $\mathsf{ak}$ encodes: when the two
+are equal, the step negated nothing; when the sum is the negation of that
+point, the step negated the shares.
 
 The group commitment in an envelope is that of the polynomial of which the
 signing share of the envelope's payload is a value.
@@ -655,22 +688,22 @@ holds:
 - it is shorter than 6 bytes, so that it has no container version or no
   wrapper id;
 - the container version is not $\mathtt{0x01}$;
-- the wrapper id is neither $\mathtt{0x00}$ nor $\mathtt{0x01}$;
-- the wrapper id is $\mathtt{0x01}$, and the envelope is shorter than 78
-  bytes or its body does not decrypt, under the recovery code that the user
-  gives, with the key, nonce and associated data of
-  [Wrapper 0x01, recovery code].
+- the wrapper id is not $\mathtt{0x00}$, $\mathtt{0x01}$ or $\mathtt{0x02}$;
+- the wrapper id is $\mathtt{0x01}$ or $\mathtt{0x02}$, and the envelope is
+  shorter than 78 bytes or its body does not decrypt, under the recovery code
+  that the user gives, with the key, nonce and associated data of
+  [Wrappers 0x01 and 0x02, recovery code].
 
 The contents are the body for wrapper $\mathtt{0x00}$, and the decrypted body
-for wrapper $\mathtt{0x01}$. The payload is the start of the contents: for
-format version $\mathtt{0x01}$, 68 bytes; for format version $\mathtt{0x02}$,
-the length that its key source and identifier form give in
+for wrappers $\mathtt{0x01}$ and $\mathtt{0x02}$. The payload is the start of
+the contents: for format version $\mathtt{0x01}$, 68 bytes; for format version
+$\mathtt{0x02}$, the length that its key source and identifier form give in
 [Payload, version 2]. When the contents are shorter than that, or end before
 the bytes that give that length, the payload is the whole contents, and it
 fails the length rule of its version below; when those bytes hold an unknown
-value, the payload fails rule 4 below. The bytes after a version 1 payload make
-the decoder reject the envelope. The bytes after a version 2 payload are its
-items: once the payload has been decoded, the decoder MUST reject the
+value, the payload fails rule 4 below. The bytes after a version 1 payload
+make the decoder reject the envelope. The bytes after a version 2 payload are
+its items: once the payload has been decoded, the decoder MUST reject the
 envelope if any of the following holds:
 
 - an item has typecode $\mathtt{0x00}$;
@@ -883,7 +916,7 @@ that this ZIP rejects:
 - whether it restores a payload that came without a group commitment item,
   whose signing share step 5 does not check against a commitment;
 - which forms of a payload it reads: the payload bytes, a member backup
-  string, an envelope under either wrapper, or a container of its own;
+  string, an envelope under any of the wrappers, or a container of its own;
 - what it requires of the registered and private-use items that it knows,
   under their own specification, including how their content has to agree
   with the payload.
@@ -926,8 +959,8 @@ Wallets MUST protect every member backup string at least as securely and
 reliably as $\mathsf{ask}$, as ZIP 2005 requires of $\mathsf{qsk}$
 [^zip-2005-usagewithfrost], and not merely like one signing share. The same
 holds for an unencrypted payload in any other form, and for a recovery code.
-An envelope under wrapper $\mathtt{0x01}$ gives nothing without its recovery
-code; a wallet MUST NOT store the two together.
+An envelope under wrapper $\mathtt{0x01}$ or $\mathtt{0x02}$ gives nothing
+without its recovery code; a wallet MUST NOT store the two together.
 
 Wallets SHOULD NOT store or transmit a string encrypted only under public-key
 encryption based on discrete logarithms or on factoring, such as Orchard note
@@ -989,6 +1022,8 @@ A wallet that offers this split:
   $\mathsf{sk}$, and that neither is the seed of a wallet;
 - SHOULD keep the group commitment item in the remaining part, so that step 5 of
   [Restore, version 2] checks a signing share that was copied by hand;
+- SHOULD encrypt the remaining part under a key derived from the secret part,
+  as described below;
 - SHOULD tell the user that the secret part does not restore the member
   without the remaining part.
 
@@ -1103,13 +1138,13 @@ share then fails step 5 of [Restore, version 2] when the remaining part holds
 a group commitment item. A wrong $\mathsf{sk}$ fails no step: the wallet derives
 another viewing key and shows another address.
 
-**Encrypting the remaining part.** A wallet that offers the split can also
-encrypt the remaining part under a key derived from the secret part: a hash
-of the signing share followed by $\mathsf{sk}$, with a domain separation
-that the wallet uses for nothing else, as the key of an authenticated
-cipher. This is an option, and this ZIP does not require it. It costs the
-user nothing, because whoever restores the member holds both secrets and
-needs no other code. It gives the following:
+**Encrypting the remaining part.** A wallet that offers the split SHOULD
+encrypt the remaining part under a key derived from the secret part: a hash of
+the signing share followed by $\mathsf{sk}$, with a domain separation that the
+wallet uses for nothing else, as the key of an authenticated cipher. A wrong
+$\mathsf{sk}$ fails no step of [Restore, version 2], and this encryption is
+what detects it. It costs the user nothing, because whoever restores the
+member holds both secrets and needs no other code. It gives the following:
 
 - the remaining part found alone is opaque: its finder learns none of the
   fields above, and an adversary that computes discrete logarithms finds no
@@ -1119,10 +1154,11 @@ needs no other code. It gives the following:
 - a secret copied with an error is detected, the signing share and
   $\mathsf{sk}$ alike: the remaining part does not decrypt.
 
-This is not the envelope of [Envelope]. Wrapper $\mathtt{0x01}$ encrypts a
-whole payload, its secrets included, under a recovery code, which is one more
-secret for the user to keep. Here the key comes from the secrets that the
-user already keeps, and the secrets are not in what is encrypted.
+This is not the envelope of [Envelope]. Wrappers $\mathtt{0x01}$ and
+$\mathtt{0x02}$ encrypt a whole payload, its secrets included, under a
+recovery code, which is one more secret for the user to keep. Here the key
+comes from the secrets that the user already keeps, and the secrets are not in
+what is encrypted.
 
 This ZIP does not define the layout of the remaining part, in the clear or
 encrypted (see [Open issues]). Two wallets exchange a payload or an envelope,
@@ -1318,7 +1354,7 @@ that member's verifying share, which they compute from the group commitment.
 The group commitment is kept in every backup so that this way stays open.
 
 **A recovery code and no password hashing.** A memory-hard function makes each
-guess of a passphrase expensive. A recovery code is 128 random bits, so
+guess of a passphrase expensive. A recovery code is 128 or 256 random bits, so
 guessing it is out of reach without such a function, and leaving the function
 out keeps the restore fast on a phone. The cost is that the user keeps a code
 and cannot choose it. A passphrase needs a memory-hard function; it would be
@@ -1326,11 +1362,22 @@ another wrapper id, which this ZIP does not define (see [Open issues]). The
 salt is in the key derivation so that a wallet which uses one recovery code
 for several groups gets one key for each.
 
-**The header is authenticated.** The associated data of wrapper
-$\mathtt{0x01}$ covers the magic, the container version, the wrapper id and
-the salt, so an envelope whose header was changed does not decrypt. The nonce
-is not in the associated data and does not need to be: it is an input of the
-cipher, so an envelope whose nonce was changed does not decrypt either.
+**Two lengths of recovery code.** A user who writes a code down by hand wants
+it short, and 128 bits is 27 symbols. Against a quantum adversary, Grover's
+algorithm finds a 128-bit code in about $2^{64}$ evaluations, the margin of
+AES-128. Once the backup holds $\mathsf{sk}$, from which $\mathsf{qsk}$ is
+derived, the code is the shortest path to it for such an adversary (see
+[Security Considerations]). A 256-bit code gives about $2^{128}$, at the cost
+of 53 symbols. Neither length suits every wallet, so the two are separate
+wrapper ids with one construction, and a reader knows the length from the
+wrapper id instead of guessing it from the text.
+
+**The header is authenticated.** The associated data of wrappers
+$\mathtt{0x01}$ and $\mathtt{0x02}$ covers the magic, the container version,
+the wrapper id and the salt, so an envelope whose header was changed does not
+decrypt. The nonce is not in the associated data and does not need to be: it
+is an input of the cipher, so an envelope whose nonce was changed does not
+decrypt either.
 
 **Version 1 is Zkool's payload.** Backups users already made keep working,
 and the first implementation exists today.
@@ -1355,14 +1402,23 @@ For the same reason, a string that is stored or sent encrypted only under
 public-key encryption based on discrete logarithms or on factoring is exposed
 to an adversary who records the ciphertext now and gains a quantum computer
 later. A passphrase with a memory-hard KDF and an AEAD (see [Open issues])
-does not have this weakness, and neither does wrapper $\mathtt{0x01}$, which
-uses no public-key encryption.
+does not have this weakness, and neither do wrappers $\mathtt{0x01}$ and
+$\mathtt{0x02}$, which use no public-key encryption.
 
-The security of an envelope under wrapper $\mathtt{0x01}$ is that of its
-recovery code: whoever holds the envelope and the code holds the payload. The
-code has 128 bits of entropy, whatever the length of the key derived from it.
-A code that is not random, for instance one derived from a passphrase, would
-be open to guessing, since the key derivation is fast.
+The security of an envelope under wrapper $\mathtt{0x01}$ or $\mathtt{0x02}$
+is that of its recovery code: whoever holds the envelope and the code holds
+the payload. The code has 128 bits of entropy under wrapper $\mathtt{0x01}$
+and 256 bits under wrapper $\mathtt{0x02}$, whatever the length of the key
+derived from it. A code that is not random, for instance one derived from a
+passphrase, would be open to guessing, since the key derivation is fast.
+
+A quantum adversary that holds an envelope can search for its code with
+Grover's algorithm: about $2^{64}$ evaluations of the key derivation and the
+cipher for a 128-bit code, and about $2^{128}$ for a 256-bit code. An
+envelope whose payload holds $\mathsf{sk}$ gives $\mathsf{qsk}$ to whoever
+opens it, for as long as the envelope is kept. A wallet that writes backups
+meant to resist such an adversary over that time uses wrapper $\mathtt{0x02}$
+(see [Recovery code]).
 
 Only a string has a checksum. The payload bytes have none, and neither has an
 envelope under wrapper $\mathtt{0x00}$. Damaged bytes can decode to a wrong
@@ -1379,11 +1435,11 @@ shares it computes with those the other members hold.
 
 The same holds for every other field. A version 2 payload and its items carry
 no proof that the $\mathsf{sk}$, the $\mathsf{ak}$, the group commitment and
-the other items come from one key generation: whoever can write them can
-write a payload and items that pass every step of [Restore, version 2] for a
-group of their own making. An unencrypted payload, in any form, can be
-written by anyone. An envelope under wrapper $\mathtt{0x01}$ can be written
-only by a holder of the recovery code, so the encryption is also what
+the other items come from one key generation: whoever can write them can write
+a payload and items that pass every step of [Restore, version 2] for a group
+of their own making. An unencrypted payload, in any form, can be written by
+anyone. An envelope under wrapper $\mathtt{0x01}$ or $\mathtt{0x02}$ can be
+written only by a holder of the recovery code, so the encryption is also what
 authenticates the payload and its items.
 
 A backup made before a group's shares were replaced, by a refresh or a
@@ -1505,8 +1561,8 @@ are in hex.
   256, which no step of [Restore, version 2] notices when the wallet knows no
   verifying share of the group.
 
-Test vectors for the envelope and the items will follow with an
-implementation.
+Test vectors for the envelope under each wrapper, for the items, and an
+example of a 256-bit recovery code will follow with an implementation.
 
 A. Version 2, key source $\mathtt{0x00}$, short identifier 1, 2-of-3, Mainnet, birthday
 height 2700000, as a string:
