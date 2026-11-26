@@ -756,12 +756,11 @@ gives for the 16 bytes as entropy, with the English word list [^bip-0039].
 
 A wallet that reads a backup mnemonic MUST ignore case, MUST treat any run of
 whitespace as one separator, and MUST ignore whitespace before the first word
-and after the last. It MUST accept the 12 words without the word `zbackup`
-before them. It MUST reject the text if any of the following holds:
+and after the last. It MUST reject the text if any of the following holds:
 
-- it is not 12 words, once a first word `zbackup` is removed;
+- it is not 13 words, or its first word is not `zbackup`;
 - a word is not in the BIP 39 English word list;
-- the BIP 39 checksum of the 12 words does not match.
+- the BIP 39 checksum of the 12 words that follow does not match.
 
 The word `zbackup` is not in the BIP 39 English word list, so a wallet given
 the 13 words as a seed phrase rejects them. A wallet MUST NOT use the 12 words
@@ -1662,8 +1661,9 @@ restores a seed does not need to know which account made the backup.
 phrase, and a user could type them into a wallet as one. The wallet would
 then create an empty wallet from them, and the user could take the backup
 mnemonic for a wallet seed. The marker `zbackup` is not a BIP 39 word, so a
-wallet rejects the 13 words as a seed phrase. A reader accepts the 12 words
-without the marker, since a user can forget it and it holds no information.
+wallet rejects the 13 words as a seed phrase. A reader requires the marker:
+the user types back the 13 words that were shown, and 12 words alone stay
+what they look like, a seed phrase.
 
 **No metadata inside a backup file.** The `age` tool refuses a file with a
 line before or after the armor, and the binary format has no place for data
