@@ -729,13 +729,18 @@ three steps:
    $m_{\mathsf{metadata}} / 325' / \mathsf{coinType}' / 0'$.
 2. $K_{\mathsf{inherent}} = \mathsf{CKDreg}(\mathsf{AccountMetadataKey}, 0, [\,])$
    is its Account-level Inherent Metadata Key.
-3. $(\mathsf{sk}_{\mathsf{backup}}, \mathsf{c}_{\mathsf{backup}}) = \mathsf{CKDreg}(K_{\mathsf{inherent}}, \mathtt{0x7FFFFFFF}, \texttt{“ZodlFROSTMemberBackupV1”})$
+3. $(\mathsf{sk}_{\mathsf{backup}}, \mathsf{c}_{\mathsf{backup}}) = \mathsf{CKDreg}(K_{\mathsf{inherent}}, \mathtt{0x7FFFFFFF}, \texttt{“ZcashFROSTMemberBackupV1”})$
    is its Private-use Inherent Metadata Key [^zip-0325-private-use] with
-   $\mathsf{PrivateUseSubject} = \texttt{“ZodlFROSTMemberBackupV1”}$.
+   $\mathsf{PrivateUseSubject} = \texttt{“ZcashFROSTMemberBackupV1”}$.
 
 In path notation:
 
-    m_metadata / 325' / coin_type' / 0' / 0' / (0x7FFFFFFF', "ZodlFROSTMemberBackupV1")
+    m_metadata / 325' / coin_type' / 0' / 0' / (0x7FFFFFFF', "ZcashFROSTMemberBackupV1")
+
+Every wallet uses this subject, byte for byte. It names no wallet, and the
+number at its end is the version of this derivation, not of the payload. A
+wallet that derives the key under another subject cannot open a backup file
+that another wallet wrote for the same seed.
 
 The 32 bytes of $\mathsf{sk}_{\mathsf{backup}}$ are the identity. The account
 is 0 whatever account the wallet uses. The coin type is in the path, so a
@@ -1657,6 +1662,14 @@ from every spending and viewing key of the seed. The account is fixed to 0,
 so a seed gives one key whatever account the wallet uses, and a user who
 restores a seed does not need to know which account made the backup.
 
+**One subject for every wallet, with no wallet's name.** ZIP 325 advises a
+wallet prefix in a private-use subject, so that two wallets do not choose the
+same subject by accident for different uses [^zip-0325-private-use]. Here the
+subject is published by this ZIP for one use, and every wallet has to derive
+the same key, so it carries no wallet's name. ZIP 325 also lets a 2000-series
+ZIP register a standardised metadata protocol, which would give this key a
+child index of its own; see [Open issues].
+
 **A marker word before the 12 words.** 12 BIP 39 words look like a seed
 phrase, and a user could type them into a wallet as one. The wallet would
 then create an empty wallet from them, and the user could take the backup
@@ -1770,7 +1783,10 @@ has 128 bits of entropy. A mnemonic that is not random, for instance one
 derived from a passphrase, would be open to guessing, since the derivation of
 the encryption key is fast. A quantum adversary that holds a backup file can
 search for its file key with Grover's algorithm, in about $2^{64}$
-evaluations, the margin of AES-128.
+evaluations, the margin of AES-128. Taken with the note of ZIP 2005 above:
+for key sources $\mathtt{0x00}$ and $\mathtt{0x01}$, such an adversary that
+holds one backup file, of any member, needs about $2^{64}$ evaluations to
+reach $\mathsf{sk}$, whatever the threshold.
 
 An encryption key derived from a wallet seed is a leaf of ZIP 32's hardened
 derivation. A party that learns it learns nothing about the spending keys or
@@ -1853,6 +1869,11 @@ back a nonce that was already used or published.
 # Deployment
 
 This ZIP changes no consensus rule. Wallets can adopt it at any time.
+
+A backup file needs an implementation of age that has the recipient type
+`mlkem768x25519`. When this text was written, the `age` tool had it since
+version 1.3.0, and the Rust crate `age` had it in a pull request that was not
+released yet (str4d/rage#632).
 
 
 # Reference implementation
@@ -1968,8 +1989,8 @@ The wallet seed is the 64 bytes $\mathtt{0x00}, \mathtt{0x01}, \ldots,
 \mathtt{0x3F}$. Its encryption keys (see [Encryption key from a wallet seed])
 are:
 
-    Mainnet  AGE-SECRET-KEY-PQ-16G5NCNQRD9UUPY9GP6XZLXQ8PMUKNAGJV74KCQ2ZX840Z0GNJP7S0SW5ES
-    Testnet  AGE-SECRET-KEY-PQ-1YDSR3RXAVKPTHWFTHJQHKWLD2Q5YLYFMSVZAD2XTPUD982WCRZWQR6CRZM
+    Mainnet  AGE-SECRET-KEY-PQ-1S9DDNTSD7VDF83JPUVNG7ZJH9442TPWU52GJGF4TQMDWCHCS3G4Q2H5CFH
+    Testnet  AGE-SECRET-KEY-PQ-1R9N6ARVSZG2KF2TK74UENF9DRA93ML0WHHCGZGR7XDVDKM50PC6QK2UNLN
 
 With the prefix `x`, the name of a backup file opened by either key (see
 [File name of a backup file]) is `x-seed-natt0kp8.zbackup`.
@@ -1990,11 +2011,14 @@ text and by `age`, will follow.
   type of the backup file, such as the scrypt stanza of age
   [^age-scrypt], which age requires to be the only stanza of its file. It
   needs a choice of parameters.
-- **Subject of the key derived from a wallet seed.** The subject
-  $\texttt{“ZodlFROSTMemberBackupV1”}$ carries a wallet prefix and a version
-  number, as ZIP 325 advises for a private-use subject
-  [^zip-0325-private-use]. Should this key be a standardised metadata
-  protocol of ZIP 325 instead of a private-use key?
+- **Subject of the key derived from a wallet seed.** The key is a
+  private-use key of ZIP 325 with the subject
+  $\texttt{“ZcashFROSTMemberBackupV1”}$, which this ZIP fixes for every
+  wallet. ZIP 325 lets a 2000-series ZIP register a standardised metadata
+  protocol instead [^zip-0325-private-use], which would give the key a child
+  index of its own and so another derivation path. If the editors prefer
+  that, a reader would have to try both keys for a wallet seed, so that the
+  backup files written under this subject still open.
 - **The version 1 reject vector named "version 2".** One string of
   `frost_member_backup_decoding` is a version 1 payload with the first byte
   $\mathtt{0x02}$, expected to be rejected as an unsupported version (see
