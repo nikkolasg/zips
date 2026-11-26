@@ -72,23 +72,68 @@ Member backup string
 Envelope
 
 : An optional binary encoding of a payload, which can also carry items after
-  a version 2 payload, in the clear or encrypted under a recovery code, defined
-  in [Envelope].
+  a version 2 payload, defined in [Envelope]. An envelope is not encrypted.
 
 Item
 
 : Optional data that an envelope carries after a version 2 payload, defined in
   [Items].
 
+Age file
+
+: A file in the format `age-encryption.org/v1` [^age]. The terms file key,
+  recipient, identity and stanza below are those of that format.
+
+File key
+
+: The 16 random bytes that an age file is encrypted under. Each age file has
+  its own.
+
+Recipient
+
+: A public key for which an age file is written.
+
+Identity
+
+: The secret key of a recipient. It opens the age files written for that
+  recipient.
+
+Stanza
+
+: An entry of the header of an age file that holds the file key encrypted for
+  one recipient. Its type says how it is encrypted. An age file written for
+  several recipients has one stanza for each, and the identity of any one of
+  them opens it.
+
+Backup file
+
+: An age file whose plaintext is an envelope, defined in [Backup file].
+
+Wallet seed
+
+: The seed $S$ of a ZIP 32 wallet [^zip-0032-wallet-seeds], from which the
+  wallet derives its spending keys.
+
+Backup mnemonic
+
+: 128 random bits made only to open backup files, which a user keeps as 13
+  words, defined in [Backup mnemonic].
+
+Encryption key
+
+: The identity that opens a backup file. It is derived from a wallet seed or
+  from a backup mnemonic, as [Encryption key] specifies.
+
 Encoder
 
-: Software that writes a payload, a member backup string or an envelope.
+: Software that writes a payload, a member backup string, an envelope or a
+  backup file.
 
 Decoder
 
-: Software that reads a payload, a member backup string or an envelope, and
-  gives the fields of the payload and the items of an envelope, as [Decoding]
-  specifies.
+: Software that reads a payload, a member backup string, an envelope or a
+  backup file, and gives the fields of the payload and the items of an
+  envelope, as [Decoding] specifies.
 
 Wallet
 
@@ -114,11 +159,16 @@ Version 2 of the payload also holds the group's viewing key or the means to
 derive it, the network and a birthday height, so that it restores on its own.
 
 How a wallet stores or moves a payload is the wallet's choice. This ZIP
-defines two optional encodings of a payload for the wallets that want them:
-the string, which holds a payload and nothing else, and an envelope, which
-holds a payload in the clear or encrypted under a recovery code. After a
+defines three optional encodings of a payload for the wallets that want them:
+the string, which holds a payload and nothing else; an envelope, which holds a
+payload in the clear; and a backup file, an age file that holds an envelope
+encrypted for post-quantum hybrid recipients (ML-KEM-768 with X25519). After a
 version 2 payload, an envelope can carry items: optional data such as the
 public commitment from which every member's verifying share is computed.
+
+The key that opens a backup file is derived from the user's wallet seed, so
+that a user who keeps a seed has nothing new to keep, or from a backup
+mnemonic of 13 words made for backups only.
 
 The string is more sensitive than the signing share it carries: it also
 carries $\mathsf{sk}$, from which a holder can compute the group's quantum
@@ -169,11 +219,16 @@ group: the group commitment gives every member's verifying share, and a
 registered item holds what its registrant's specification defines. All of
 this is as private as the payload that they come with.
 
-An envelope under wrapper $\mathtt{0x01}$ or $\mathtt{0x02}$ hides its
-payload, but shows its salt. When the salt is a value fixed for the group,
-anyone who sees two such envelopes learns that they belong to the same group,
-and anyone who knows the group's value recognises its envelopes. A random salt
-shows nothing.
+A backup file hides its envelope. A stanza does not identify its recipient,
+so the file does not show who can open it. It shows the number of its
+stanzas, and the length of the envelope it holds; with a group commitment
+item, that length grows with the threshold $t$.
+
+The name of a backup file can show 8 characters of the seed fingerprint of
+the wallet seed that opens it (see [File name of a backup file]). These
+characters link the backup files of one wallet seed, and anyone who knows
+that seed's fingerprint recognises its files. A backup file named for a
+backup mnemonic shows only that a mnemonic opens it.
 
 A remaining part kept in the clear shows the fields that
 [Keeping the secret fields apart] lists. An encrypted
@@ -198,6 +253,10 @@ onlookers, as with any secret displayed on screen.
   wallet that does not know such data still restores the member.
 - A payload can be stored encrypted, and the encryption can change without
   changing the payload.
+- An encrypted backup stays secret against an adversary that records it now
+  and can compute discrete logarithms later.
+- A user can open an encrypted backup with the wallet seed they already keep,
+  or with a secret made for backups only.
 
 
 # Non-requirements
@@ -257,21 +316,22 @@ a QR code, a container of its own. A wallet conforms whatever it puts the
 payload in, as long as the bytes of the payload are unchanged. An unencrypted
 payload needs nothing around it: it is the payload bytes.
 
-This ZIP defines two encodings of a payload. Both are optional. A wallet uses
+This ZIP defines three encodings of a payload. All are optional. A wallet uses
 one when it wants what that encoding gives:
 
 - a member backup string, defined in this section: text with a checksum, which
   a user can copy. It holds a payload and nothing else;
-- an envelope, defined in [Envelope]: bytes that hold a payload, in the clear
-  or encrypted under a recovery code, and after a version 2 payload, zero or
-  more items (see [Items]).
+- an envelope, defined in [Envelope]: bytes that hold a payload in the clear,
+  and after a version 2 payload, zero or more items (see [Items]);
+- a backup file, defined in [Backup file]: an age file that holds an envelope,
+  encrypted for one or more recipients.
 
 It also defines a way to keep a version 2 payload and its items in two parts,
 one of which holds the two secret fields, in [Keeping the secret fields apart].
 It is optional as well.
 
-An encoder that writes a member backup string or an envelope, and a decoder
-that reads one, MUST follow the rules of that encoding.
+An encoder that writes a member backup string, an envelope or a backup file,
+and a decoder that reads one, MUST follow the rules of that encoding.
 
 A member backup string is the Bech32m [^bip-0350] encoding of a payload, with
 the human-readable part `zkfrost`. As in ZIP 316 [^zip-0316], the length limit
@@ -403,13 +463,12 @@ holds them:
 | Wrapper id | Wrapper | Wrapper parameters | Body |
 |------------|---------|--------------------|------|
 | $\mathtt{0x00}$ | none | none | the contents |
-| $\mathtt{0x01}$ | 128-bit recovery code | salt (32 bytes), then nonce (24 bytes) | the encrypted contents, 16 bytes longer than the contents |
-| $\mathtt{0x02}$ | 256-bit recovery code | salt (32 bytes), then nonce (24 bytes) | the encrypted contents, 16 bytes longer than the contents |
 | other      | unassigned | | |
 
-Under wrappers $\mathtt{0x01}$ and $\mathtt{0x02}$ the payload and its items
-are encrypted together. Wrapper $\mathtt{0x00}$ carries a payload and its
-items in the clear (see [Rationale]).
+Wrapper $\mathtt{0x00}$ carries a payload and its items in the clear (see
+[Rationale]). An encoder MUST NOT write an envelope under another wrapper id.
+A backup file encrypts an envelope under wrapper $\mathtt{0x00}$ (see
+[Backup file]).
 
 An envelope is bytes. An encoder that writes an envelope as text MUST write
 the base64url encoding (RFC 4648, section 5 [^rfc4648-base64url]) of the
@@ -422,101 +481,9 @@ neither a member backup string nor the base64 of an envelope.
 
 Every envelope starts with the bytes $\mathtt{0x8A}$ $\mathtt{0x5A}$
 $\mathtt{0x46}$ $\mathtt{0x42}$ $\mathtt{0x01}$, so its text starts with
-`ilpGQgE` (`ilpGQgEA` under wrapper $\mathtt{0x00}$, `ilpGQgEB` under wrapper
-$\mathtt{0x01}$, `ilpGQgEC` under wrapper $\mathtt{0x02}$), which no member
-backup string starts with.
+`ilpGQgE` (`ilpGQgEA` under wrapper $\mathtt{0x00}$), which no member backup
+string starts with.
 
-### Recovery code
-
-A recovery code is 128 bits for wrapper $\mathtt{0x01}$ and 256 bits for
-wrapper $\mathtt{0x02}$. An encoder MUST draw them from a cryptographic
-random number generator. It MUST NOT derive them from a passphrase, or let the
-user choose them. Below, $\mathsf{code}$ is the recovery code as 16 bytes for
-wrapper $\mathtt{0x01}$ and as 32 bytes for wrapper $\mathtt{0x02}$.
-
-The two wrappers differ only in the length of the code. The wallet chooses
-one. Wrapper $\mathtt{0x01}$ is for a code that the user writes down by hand.
-Wrapper $\mathtt{0x02}$ is for a backup meant to resist a quantum adversary
-for as long as the backup holds $\mathsf{sk}$: with Grover's algorithm, such an
-adversary finds a 128-bit code in about $2^{64}$ evaluations, and a 256-bit
-code in about $2^{128}$ (see [Security Considerations]). A wallet that reads an
-envelope learns from its wrapper id which length the code has.
-
-A wallet shows a recovery code to its user as text. Let $L$ be the length of
-the code in bits, and $m$ the number of its data symbols: $m = 26$ when
-$L = 128$, and $m = 52$ when $L = 256$.
-
-1. Read $\mathsf{code}$ as one $L$-bit integer $c$, in big-endian order.
-2. Write $c$ as $m$ symbols of Crockford's Base32 alphabet
-   `0123456789ABCDEFGHJKMNPQRSTVWXYZ` [^crockford-base32], most significant
-   first. A symbol holds 5 bits, so the first symbol is at most `7` when
-   $L = 128$, and at most `1` when $L = 256$.
-3. Append one check symbol, the symbol of value $c \bmod 37$ in the alphabet
-   `0123456789ABCDEFGHJKMNPQRSTVWXYZ*~$=U`.
-4. Write these $m + 1$ symbols in groups of four separated by `-`; the last
-   group has the symbols that remain. A 128-bit code is 27 symbols, whose last
-   group has three. A 256-bit code is 53 symbols, whose last group has one.
-
-For example, the 128-bit code made of the bytes
-$\mathtt{0x00}, \mathtt{0x01}, \ldots, \mathtt{0x0F}$ gives
-`0004-1061-050R-3GG2-8A1C-60T3-GF6`.
-
-A wallet that reads a recovery code MUST ignore `-` and spaces, MUST ignore
-case, and MUST read `I` and `L` as `1` and `O` as `0`. It knows $L$ from the
-wrapper id of the envelope that the code opens. It MUST reject the text if any
-of the following holds:
-
-- it does not have exactly $m + 1$ symbols;
-- one of the first $m$ symbols is not in the 32-symbol alphabet;
-- the last symbol is not in the 37-symbol alphabet;
-- the first symbol is above `7` when $L = 128$, or above `1` when $L = 256$;
-- the check symbol is not the one computed from the first $m$ symbols.
-
-The check symbol catches one wrong symbol, and two different neighbouring
-symbols written in the other order, before any decryption is tried.
-
-### Wrappers 0x01 and 0x02, recovery code
-
-The contents are encrypted with XChaCha20-Poly1305 [^xchacha] under a key
-derived from a recovery code. Wrappers $\mathtt{0x01}$ and $\mathtt{0x02}$ use
-the same construction, described below. They differ only in the length of the
-code: 16 bytes for wrapper $\mathtt{0x01}$, 32 bytes for wrapper
-$\mathtt{0x02}$ (see [Recovery code]).
-
-salt
-
-: 32 bytes chosen by the encoder and stored in the clear. They make one
-  recovery code give a different key for each salt. An encoder MUST use either
-  32 bytes from a cryptographic random number generator, or a value that is
-  fixed for the group and that the wallet does not need to keep secret, such
-  as an identifier of the group.
-
-nonce
-
-: 24 bytes. An encoder MUST draw them from a cryptographic random number
-  generator for each envelope it writes.
-
-key
-
-: $\mathsf{BLAKE2b\text{-}256}(\texttt{"ZcashFROSTBackup"},\, \mathsf{code} \,\|\, \mathsf{salt})$,
-  that is BLAKE2b [^protocol-concreteblake2] with a 32-byte output, the
-  16-byte personalization `ZcashFROSTBackup`, no key and no salt parameter,
-  applied to $\mathsf{code} \,\|\, \mathsf{salt}$: 48 bytes for wrapper
-  $\mathtt{0x01}$, 64 bytes for wrapper $\mathtt{0x02}$.
-
-associated data
-
-: The 38 bytes of the envelope that precede the nonce: the magic, the container
-  version, the wrapper id and the salt.
-
-body
-
-: The XChaCha20-Poly1305 encryption of the contents (the payload and its
-  items) under the key, the nonce and the associated data: the ciphertext, as
-  long as the contents, followed by the 16-byte tag.
-
-No password hashing function is applied, because the recovery code is 128 or
-256 random bits and not a passphrase.
 
 ## Items
 
@@ -526,14 +493,20 @@ string carries none. An item is encoded as:
 
 | Size   | Field |
 |--------|-------|
-| 1      | typecode |
-| varies | length of the value in bytes, as a $\mathtt{compactSize}$ [^Bitcoin-CompactSize] |
+| varies | typecode, as a $\mathtt{compactSize}$ [^Bitcoin-CompactSize] |
+| varies | length of the value in bytes, as a $\mathtt{compactSize}$ |
 | length | value |
+
+A typecode is an integer from 1 to $\mathtt{0x02000000}$, the bound that ZIP
+316 sets for the typecodes of its items [^zip-0316]. Every typecode that this
+ZIP assigns or leaves to private use is at most $\mathtt{0xFC}$, so its
+encoding is one byte.
 
 The items take all the bytes of the envelope's body after the payload. An
 encoder MUST write items in strictly increasing order of typecode, so a
-typecode appears at most once, and MUST write each length in the shortest
-$\mathtt{compactSize}$ form. A body therefore has one encoding.
+typecode appears at most once, and MUST write each typecode and each length
+in the shortest $\mathtt{compactSize}$ form. A body therefore has one
+encoding.
 
 A decoder MUST skip an item whose typecode it does not know. A wallet built
 before an item was defined still restores the member from an envelope that
@@ -546,7 +519,8 @@ The typecodes are divided as follows:
 | $\mathtt{0x00}$ | never used |
 | $\mathtt{0x01}$ to $\mathtt{0x7F}$ | standard items, defined by this ZIP |
 | $\mathtt{0x80}$ to $\mathtt{0xBF}$ | registered items, assigned to a wallet or a protocol by the table in [Registered items] |
-| $\mathtt{0xC0}$ to $\mathtt{0xFF}$ | private use, never assigned (see [Private-use items]) |
+| $\mathtt{0xC0}$ to $\mathtt{0xFC}$ | private use, never assigned (see [Private-use items]) |
+| $\mathtt{0xFD}$ to $\mathtt{0x02000000}$ | reserved, encoded in more than one byte; none is assigned |
 
 The standard items are:
 
@@ -555,7 +529,8 @@ The standard items are:
 | $\mathtt{0x01}$ | group commitment | $32 \cdot (t - 1)$ |
 | $\mathtt{0x02}$ to $\mathtt{0x7F}$ | unassigned | |
 
-An encoder MUST NOT write an unassigned standard typecode.
+An encoder MUST NOT write an unassigned standard typecode, or a reserved
+typecode.
 
 ### Group commitment
 
@@ -661,18 +636,179 @@ for different data. An encoder MUST start the value of a private-use item
 with a 4-byte tag chosen by the wallet that writes it. A decoder MUST skip a
 private-use item whose tag is not one of its own.
 
+## Backup file
+
+A backup file is an age file, as the age specification defines it [^age]. Its
+plaintext is an envelope under wrapper $\mathtt{0x00}$: the payload followed
+by its items (see [Envelope]).
+
+The recipients of a backup file are of the age type
+`mlkem768x25519` [^age-mlkem768x25519]. Such a stanza encrypts the
+file key with HPKE [^rfc9180] under the key encapsulation mechanism
+MLKEM768-X25519 [^hpke-pq], also named X-Wing, which combines ML-KEM-768
+[^fips203] with X25519 [^rfc7748]. The `age` tool reads and writes this type
+from version 1.3. An identity of this type is 32 bytes, and its recipient
+is derived from it as the age specification says.
+
+An encoder that writes a backup file:
+
+- MUST write an age file as the age specification says, with a file key of 16
+  bytes from a cryptographic random number generator;
+- MUST write as its plaintext an envelope under wrapper $\mathtt{0x00}$;
+- MUST write one stanza of type `mlkem768x25519` for each recipient, and at
+  least one;
+- MUST NOT write a stanza of any other type.
+
+The identity of any one recipient opens the file.
+
+A decoder that reads a backup file MUST skip a stanza whose type it does not
+know, as the age specification requires. It MUST reject the file if any of
+the following holds:
+
+- the file is not an age file under the rules of the age specification;
+- a stanza of type `mlkem768x25519` is not well formed: it does not have
+  exactly one argument that is the canonical unpadded base64 of 1120 bytes,
+  or its body is not 32 bytes;
+- no stanza of type `mlkem768x25519` gives the file key under the identity
+  that the decoder was given;
+- the header's MAC does not verify, or the payload of the age file does not
+  decrypt, under that file key;
+- the plaintext is not an envelope, or it is an envelope under another
+  wrapper than $\mathtt{0x00}$.
+
+The decoder then reads the plaintext as an envelope (see [Decoding]).
+
+### Text form of a backup file
+
+The text form of a backup file is the ASCII armor that the age
+specification defines [^age-armor]. It is three parts:
+
+1. the line `-----BEGIN AGE ENCRYPTED FILE-----`;
+2. the bytes of the age file in base64, with the alphabet of section 4 of
+   RFC 4648 and with `=` padding [^rfc4648-base64], in lines of 64
+   characters, the last of which can be shorter;
+3. the line `-----END AGE ENCRYPTED FILE-----`.
+
+An encoder MUST end each line with a line feed, and MUST NOT write anything
+before the first line or after the last.
+
+A decoder MUST ignore ASCII whitespace before the first line and after the
+last, and MUST accept a line feed or a carriage return and a line feed at the
+end of each line. It MUST reject any other text: a line before the first line
+or after the last, a line of the body longer than 64 characters, a line other
+than the last one shorter than 64 characters, an empty line, or base64 that is
+not canonical. `age` 1.3.2 refuses a file with any line before the first line
+or after the last, so a backup file carries no metadata of its own.
+
+## Encryption key
+
+The encryption key of a backup file is an identity of type
+`mlkem768x25519`. Its 32 bytes are derived from one of two secrets: a wallet
+seed (see [Encryption key from a wallet seed]) or a backup mnemonic (see
+[Encryption key from a backup mnemonic]). An encoder writes a backup file for
+the recipient of the encryption key.
+
+### Encryption key from a wallet seed
+
+Let $S$ be a wallet seed of 32 to 252 bytes [^zip-0032-wallet-seeds], and
+$\mathsf{coinType}$ the ZIP 32 coin type of the network that the wallet uses:
+133 for Mainnet, 1 for Testnet.
+
+The key is derived in the Account Metadata Key tree of ZIP 325
+[^zip-0325-metadata-key-tree], whose $\mathsf{ContextString}$ is
+$\texttt{“MetadataKeys”}$ and whose $\mathsf{ZipNumber}$ is 325, with
+ZIP 32's registered key derivation [^zip-0032-registered-key-derivation], in
+three steps:
+
+1. $\mathsf{AccountMetadataKey}$ is the key of ZIP 325 for $S$,
+   $\mathsf{coinType}$ and account 0:
+   $m_{\mathsf{metadata}} / 325' / \mathsf{coinType}' / 0'$.
+2. $K_{\mathsf{inherent}} = \mathsf{CKDreg}(\mathsf{AccountMetadataKey}, 0, [\,])$
+   is its Account-level Inherent Metadata Key.
+3. $(\mathsf{sk}_{\mathsf{backup}}, \mathsf{c}_{\mathsf{backup}}) = \mathsf{CKDreg}(K_{\mathsf{inherent}}, \mathtt{0x7FFFFFFF}, \texttt{“ZodlFROSTMemberBackupV1”})$
+   is its Private-use Inherent Metadata Key [^zip-0325-private-use] with
+   $\mathsf{PrivateUseSubject} = \texttt{“ZodlFROSTMemberBackupV1”}$.
+
+In path notation:
+
+    m_metadata / 325' / coin_type' / 0' / 0' / (0x7FFFFFFF', "ZodlFROSTMemberBackupV1")
+
+The 32 bytes of $\mathsf{sk}_{\mathsf{backup}}$ are the identity. The account
+is 0 whatever account the wallet uses. The coin type is in the path, so a
+wallet seed gives another encryption key on each network.
+
+A wallet MUST reject a wallet seed shorter than 32 bytes or longer than 252
+bytes.
+
+### Backup mnemonic
+
+A backup mnemonic is 16 bytes. An encoder MUST draw them from a
+cryptographic random number generator. It MUST NOT derive them from a
+passphrase, or let the user choose them.
+
+A wallet shows a backup mnemonic to its user as 13 words, in lowercase,
+separated by single spaces: the word `zbackup`, then the 12 words that BIP 39
+gives for the 16 bytes as entropy, with the English word list [^bip-0039].
+
+A wallet that reads a backup mnemonic MUST ignore case, MUST treat any run of
+whitespace as one separator, and MUST ignore whitespace before the first word
+and after the last. It MUST accept the 12 words without the word `zbackup`
+before them. It MUST reject the text if any of the following holds:
+
+- it is not 12 words, once a first word `zbackup` is removed;
+- a word is not in the BIP 39 English word list;
+- the BIP 39 checksum of the 12 words does not match.
+
+The word `zbackup` is not in the BIP 39 English word list, so a wallet given
+the 13 words as a seed phrase rejects them. A wallet MUST NOT use the 12 words
+as a wallet seed, and MUST NOT apply the seed derivation of BIP 39 (PBKDF2)
+to them.
+
+### Encryption key from a backup mnemonic
+
+Let $\mathsf{m}$ be the 16 bytes of a backup mnemonic. The identity is
+
+$$\mathsf{BLAKE2b\text{-}256}(\texttt{“ZcashFROSTAgeKey”},\, \mathsf{m}),$$
+
+that is BLAKE2b [^protocol-concreteblake2] with a 32-byte output, the 16-byte
+personalization `ZcashFROSTAgeKey`, no key and no salt parameter, applied to
+the 16 bytes of $\mathsf{m}$.
+
+### File name of a backup file
+
+A wallet that gives a backup file a name SHOULD use one of these forms:
+
+- `<prefix>-seed-<tag>.zbackup` when the encryption key comes from a wallet
+  seed. `<tag>` is the first 8 characters, after `zip32seedfp1`, of the text
+  form of the ZIP 32 seed fingerprint of that wallet seed: Bech32m with the
+  human-readable part `zip32seedfp` [^zip-0032-seed-fingerprints]. These 8
+  characters hold the first 40 bits of the fingerprint.
+- `<prefix>-key.zbackup` when the encryption key comes from a backup
+  mnemonic.
+
+`<prefix>` is chosen by the wallet. A decoder reads a name without regard to
+case. A name that ends in neither form gives no hint.
+
+The name is a hint only. A user can rename a file, and a backup file pasted
+as text has no name. A decoder MUST NOT reject a backup file for its name. It
+uses the name only to choose which encryption key to try first. When the name
+gives no hint, or the key it names does not open the file, the decoder tries
+the other encryption keys it has.
+
 ## Decoding
 
-The input of a decoder is a payload, a member backup string or an envelope.
-A decoder of a string or of an envelope first takes the payload out of it, as
-below. Every payload is then parsed under the same rules, wherever it came
+The input of a decoder is a payload, a member backup string, an envelope or
+a backup file. A decoder of a backup file first takes the envelope out of it
+(see [Backup file]). A decoder of a string or of an envelope takes the payload
+out of it, as below. Every payload is then parsed under the same rules, wherever it came
 from. A decoder of an envelope also parses the items that follow a version 2
 payload.
 
 The decoder reads the input as it is given. It MUST NOT remove or skip any
 byte of it, such as a space or a line break before or after a string. The
-text of an envelope is the one exception: its decoder ignores whitespace (see
-[Envelope]). A wallet
+text of an envelope and the text form of a backup file are the exceptions:
+their decoders ignore whitespace (see [Envelope] and
+[Text form of a backup file]). A wallet
 that takes a string from its user removes such characters before it calls the
 decoder.
 
@@ -696,16 +832,11 @@ holds:
 - it is shorter than 6 bytes, so that it has no container version or no
   wrapper id;
 - the container version is not $\mathtt{0x01}$;
-- the wrapper id is not $\mathtt{0x00}$, $\mathtt{0x01}$ or $\mathtt{0x02}$;
-- the wrapper id is $\mathtt{0x01}$ or $\mathtt{0x02}$, and the envelope is
-  shorter than 78 bytes or its body does not decrypt, under the recovery code
-  that the user gives, with the key, nonce and associated data of
-  [Wrappers 0x01 and 0x02, recovery code].
+- the wrapper id is not $\mathtt{0x00}$.
 
-The contents are the body for wrapper $\mathtt{0x00}$, and the decrypted body
-for wrappers $\mathtt{0x01}$ and $\mathtt{0x02}$. The payload is the start of
-the contents: for format version $\mathtt{0x01}$, 68 bytes; for format version
-$\mathtt{0x02}$, the length that its key source and identifier form give in
+The contents are the body. The payload is the start of the contents: for
+format version $\mathtt{0x01}$, 68 bytes; for format version $\mathtt{0x02}$,
+the length that its key source and identifier form give in
 [Payload, version 2]. When the contents are shorter than that, or end before
 the bytes that give that length, the payload is the whole contents, and it
 fails the length rule of its version below; when those bytes hold an unknown
@@ -714,7 +845,10 @@ make the decoder reject the envelope. The bytes after a version 2 payload are
 its items: once the payload has been decoded, the decoder MUST reject the
 envelope if any of the following holds:
 
-- an item has typecode $\mathtt{0x00}$;
+- an item has typecode $\mathtt{0x00}$, or a typecode greater than
+  $\mathtt{0x02000000}$;
+- an item's typecode is not in the shortest $\mathtt{compactSize}$ form, or
+  the contents end before the end of the typecode;
 - an item's typecode is not greater than the typecode of the item before it;
 - an item's length is not in the shortest $\mathtt{compactSize}$ form, or the
   contents end before the end of the item's length or value;
@@ -731,6 +865,9 @@ its format version, $\mathtt{0x01}$ or $\mathtt{0x02}$. A remaining part,
 which is not a form of a payload and is read only together with a secret part,
 starts with its own four magic bytes, and its text with `ilpGUgE` (see
 [Format of the remaining part]).
+A backup file starts with `age-encryption.org/v1` in ASCII, and its text
+form, after any whitespace, with `-----BEGIN AGE ENCRYPTED FILE-----` (see
+[Backup file]).
 
 A decoder parses a payload in two steps:
 
@@ -927,8 +1064,8 @@ that this ZIP rejects:
 - whether it restores a payload that came without a group commitment item,
   whose signing share step 5 does not check against a commitment;
 - which forms of a payload it reads: the payload bytes, a member backup
-  string, an envelope under any of the wrappers, a payload kept in two parts
-  (see [Keeping the secret fields apart]), or a container of its own;
+  string, an envelope, a backup file, a payload kept in two parts (see
+  [Keeping the secret fields apart]), or a container of its own;
 - what it requires of the registered and private-use items that it knows,
   under their own specification, including how their content has to agree
   with the payload.
@@ -959,8 +1096,8 @@ A wallet MUST NOT put signing nonces, or any other secret beyond the fields
 above, in a version 1 string. A wallet MUST NOT put signing nonces in a
 payload of any version, or in an item.
 
-A wallet that exports a version 2 payload in an envelope SHOULD include the
-group commitment item when it knows the group commitment. A wallet MUST NOT
+A wallet that exports a version 2 payload in an envelope, or in a backup
+file, SHOULD include the group commitment item when it knows the group commitment. A wallet MUST NOT
 export an envelope whose group commitment item and payload's signing share
 fail step 5 of
 [Restore, version 2].
@@ -970,13 +1107,22 @@ fail step 5 of
 Wallets MUST protect every member backup string at least as securely and
 reliably as $\mathsf{ask}$, as ZIP 2005 requires of $\mathsf{qsk}$
 [^zip-2005-usagewithfrost], and not merely like one signing share. The same
-holds for an unencrypted payload in any other form, and for a recovery code.
-An envelope under wrapper $\mathtt{0x01}$ or $\mathtt{0x02}$ gives nothing
-without its recovery code; a wallet MUST NOT store the two together.
+holds for an unencrypted payload in any other form, for a backup mnemonic,
+and for an encryption key. A backup file gives nothing without its encryption
+key. A wallet MUST NOT write a backup file to a store, such as a cloud drive,
+that also holds the encryption key that opens it, the backup mnemonic, or the
+wallet seed that the key is derived from.
+
+A recipient is a public key, but anyone who holds it can write a backup file
+that its encryption key opens (see [Security Considerations]). A wallet that
+keeps the recipient of an encryption key, to write backup files later, MUST
+protect it as it protects the signing share, and MUST NOT disclose it.
 
 Wallets SHOULD NOT store or transmit a string encrypted only under public-key
 encryption based on discrete logarithms or on factoring, such as Orchard note
-encryption, X25519, or RSA and elliptic-curve OpenPGP keys.
+encryption, X25519, or RSA and elliptic-curve OpenPGP keys. A backup file
+meets this rule: the stanzas of type `mlkem768x25519` combine X25519 with
+ML-KEM-768, which is based on neither.
 
 ### Keeping the secret fields apart
 
@@ -1183,12 +1329,11 @@ It does not protect the secret part. The secret part is the key: whoever holds
 it opens the remaining part, and also writes one that the wallet accepts. The
 secret part is what the user keeps apart and guards.
 
-This is not the envelope of [Envelope]. Wrappers $\mathtt{0x01}$ and
-$\mathtt{0x02}$ encrypt a whole payload, its secrets included, under a
-recovery code, which is one more secret for the user to keep. Here the key
-comes from the secrets that the user already keeps, and the secrets are not in
-what is encrypted. The cipher, the hash and the layout of the header are those
-of the envelope's wrappers, so a wallet implements one construction for both.
+This is not a backup file (see [Backup file]). A backup file encrypts a
+whole payload, its secrets included, under an encryption key that comes from
+a wallet seed or a backup mnemonic. Here the key comes from the secrets that
+the user keeps for the member, and the secrets are not in what is
+encrypted.
 
 **If the remaining part is lost.** The secret part alone does not restore the
 member. The network, the threshold, the group size, $\mathsf{ak}$ and the
@@ -1248,8 +1393,7 @@ A remaining part is the following bytes:
 | other | unassigned | | |
 
 Under mode $\mathtt{0x01}$, the plaintext is encrypted with XChaCha20-Poly1305
-[^xchacha], as for wrappers $\mathtt{0x01}$ and $\mathtt{0x02}$ (see
-[Wrappers 0x01 and 0x02, recovery code]), with the following values:
+[^xchacha], with the following values:
 
 salt
 
@@ -1281,8 +1425,9 @@ body
   and the associated data: the ciphertext, as long as the plaintext, followed
   by the 16-byte tag.
 
-The personalization differs from that of the wrappers, so a key derived for a
-remaining part is never the key of an envelope.
+The personalization differs from that of the encryption key of a backup
+mnemonic (see [Encryption key from a backup mnemonic]), so a key derived for a
+remaining part is never the encryption key of a backup file.
 
 A remaining part written as text follows the rules of the text of an envelope
 (see [Envelope]): an encoder writes the base64url encoding of its bytes without
@@ -1430,8 +1575,8 @@ around the payload: the envelope, and the items it carries. Wallets differ in
 where a backup lives: a file, a QR code, a store that has its own encryption.
 A rule that names one of these would bind every wallet and make no payload
 easier to restore, so this ZIP has none. The string and the envelope are
-defined so that the wallets which want text, or extra data and encryption
-under a recovery code, do it in one way.
+defined so that the wallets which want text, or extra data and encryption,
+do it in one way.
 
 **A payload kept in two parts.** A user who engraves a backup on steel wants
 to engrave little. Only the signing share and $\mathsf{sk}$ have to be kept as
@@ -1448,33 +1593,85 @@ it would lose the remaining part. The secrets are already kept, and whoever
 restores holds them. Deriving the key from both secrets also makes the
 encryption a check of the secret part: an $\mathsf{sk}$ copied with an error
 passes every step of [Restore, version 2], and fails here. The remaining part
-has its own magic rather than a wrapper id of the envelope, because an
-envelope opens with its recovery code alone, while a remaining part is read
-only with a secret part and holds no payload until the two are put together.
-The construction is otherwise that of the envelope's wrappers, with a
-personalization of its own, so a wallet implements one cipher and one key
-derivation. The salt is not needed for the key to be unique, since the
-signing share differs for each member; it is kept so that the header has the
-layout of the wrappers' header.
+has its own magic rather than a wrapper id of the envelope, because a
+remaining part is read only with a secret part and holds no payload until the
+two are put together. The salt is not needed for the key to be unique, since
+the signing share differs for each member; it makes the key differ for each
+remaining part that is written.
 
-**Telling the forms apart.** A decoder can be given three kinds of input: a
+**Telling the forms apart.** A decoder can be given five kinds of input: a
 string, which starts with `zkfrost1`; the bytes of an envelope, whose first
 byte $\mathtt{0x8A}$ is not printable ASCII and not a Bech32m character, so
-that no UTF-8 text starts with it; and the text of an envelope, which starts
-with `ilpGQgE`. The bytes of a payload start with $\mathtt{0x01}$ or
-$\mathtt{0x02}$. A decoder therefore tells them apart from the first bytes,
-without being told which one it was given. The text of an envelope needs no
-prefix of its own: the magic already identifies it, and an encrypted envelope
-detects damage when it is opened. A remaining part is not a fourth kind of
-input of a decoder, since it is read only with a secret part, but it is told
-apart the same way: its magic, $\mathtt{0x8A}$ then `ZFR`, differs from the
-envelope's in its fourth byte, so its text starts with `ilpGUgE` and not
-`ilpGQgE`.
+that no UTF-8 text starts with it; the text of an envelope, which starts
+with `ilpGQgE`; a backup file, which starts with `age-encryption.org/v1`; and
+the text form of a backup file, which starts with `-----BEGIN`. The bytes of a
+payload start with $\mathtt{0x01}$ or $\mathtt{0x02}$. A decoder therefore
+tells them apart from the first bytes, without being told which one it was
+given. The text of an envelope needs no prefix of its own: the magic already
+identifies it. A remaining part is not another kind of input of a decoder,
+since it is read only with a secret part, but it is told apart the same way:
+its magic, $\mathtt{0x8A}$ then `ZFR`, differs from the envelope's in its
+fourth byte, so its text starts with `ilpGUgE` and not `ilpGQgE`.
 
-**Wrapper 0x00.** An unencrypted payload without items needs no envelope:
+**One wrapper.** An unencrypted payload without items needs no envelope:
 the payload bytes or the string carry it. Wrapper $\mathtt{0x00}$ carries a
-payload with its items in the clear, and lets a wallet that reads envelopes
-take an unencrypted backup and an encrypted one through the same header.
+payload with its items in the clear, for a backup file to encrypt or for a
+store that has its own encryption. Encryption is left to age, so the envelope
+needs no other wrapper. The wrapper id stays in the header so that a later
+ZIP can define another wrapper without a new container version.
+
+**age and not a new cipher.** age is a specified file format, and the `age`
+tool, from version 1.3, opens a backup file without any Zcash software: a user
+who has lost every wallet still gets the envelope back. Its post-quantum hybrid recipients meet the rule of
+[Storage and transmission] on public-key encryption: a file stays secret as
+long as ML-KEM-768 or X25519 does. Its recipients let a wallet write a backup
+without holding the secret that opens it, for instance to write a new backup
+after each change of the group, with the encryption key kept offline. A
+cipher defined by this ZIP would give none of this, and would need its own
+review.
+
+**A 128-bit file key.** age draws a file key of 16 bytes, so a backup file
+has the margin of a 128-bit key, whatever its encryption key: a quantum
+adversary that searches for the file key with Grover's algorithm needs about
+$2^{64}$ evaluations (see [Security Considerations]). An earlier draft of
+this text offered a 256-bit recovery code for backups meant to last. A backup
+file cannot offer that, since age fixes the length of the file key. This is
+the cost of a format that the `age` tool opens.
+
+**Two sources for the encryption key.** Most users already keep a wallet
+seed, and a key derived from it adds nothing to keep. Some users hold no
+seed of a ZIP 32 wallet, or do not want the backup of a group to depend on
+the seed of a personal wallet; a backup mnemonic serves them. It is 128
+random bits, as strong as the file key of age, so it needs no password
+hashing, and opening a file stays fast on a phone. A user cannot choose it,
+which is the cost of leaving password hashing out.
+
+**ZIP 325's private-use key, under account 0.** ZIP 325 already defines a
+tree of keys, derived from the wallet seed, for data that a wallet keeps
+outside the chain, and reserves a private-use child in it. Using it needs no
+new registered derivation. ZIP 32's hardened derivation separates the key
+from every spending and viewing key of the seed. The account is fixed to 0,
+so a seed gives one key whatever account the wallet uses, and a user who
+restores a seed does not need to know which account made the backup.
+
+**A marker word before the 12 words.** 12 BIP 39 words look like a seed
+phrase, and a user could type them into a wallet as one. The wallet would
+then create an empty wallet from them, and the user could take the backup
+mnemonic for a wallet seed. The marker `zbackup` is not a BIP 39 word, so a
+wallet rejects the 13 words as a seed phrase. A reader accepts the 12 words
+without the marker, since a user can forget it and it holds no information.
+
+**No metadata inside a backup file.** The `age` tool refuses a file with a
+line before or after the armor, and the binary format has no place for data
+that age does not define. Any such line would make the file unreadable without software of
+this ZIP. Whatever a wallet wants to keep with the payload goes in the
+envelope's items, inside the encryption.
+
+**A hint in the file name.** A wallet that is given a file needs to know
+which key to try: the key of its wallet seed, or a backup mnemonic to ask the
+user for. Nothing in an age file says it, by design. A file name is the
+one place outside the file that a user sees and that travels with the file.
+The name is a hint only, because a user can rename a file.
 
 **Items sit in the envelope.** Items are kept out of the payload for three
 reasons. Nothing deployed or being built against the version 2 text of
@@ -1499,7 +1696,11 @@ without a new version. A change that an older wallet must not ignore still
 takes a new format version. Strict typecode order and one item per typecode
 keep one encoding per envelope. ZIP 316 treats the items of a unified address
 or viewing key the same way: ascending typecode order, no typecode twice, and
-unknown items ignored [^zip-0316].
+unknown items ignored [^zip-0316]. The typecode is a
+$\mathtt{compactSize}$ as in ZIP 316, and the private-use range stops at
+$\mathtt{0xFC}$, the greatest value encoded in one byte. When the one-byte
+typecodes run out, typecodes are assigned in the reserved range with no new
+format version, and a decoder written before that skips their items.
 
 **Registered and private-use typecodes.** A wallet can have data of its own
 to put in a backup. Without a place for it, each wallet would wrap the payload in a format of its own, and backups
@@ -1531,32 +1732,6 @@ challenge with its signing share, and the others verify the signature against
 that member's verifying share, which they compute from the group commitment.
 The group commitment is kept in every backup so that this way stays open.
 
-**A recovery code and no password hashing.** A memory-hard function makes each
-guess of a passphrase expensive. A recovery code is 128 or 256 random bits, so
-guessing it is out of reach without such a function, and leaving the function
-out keeps the restore fast on a phone. The cost is that the user keeps a code
-and cannot choose it. A passphrase needs a memory-hard function; it would be
-another wrapper id, which this ZIP does not define (see [Open issues]). The
-salt is in the key derivation so that a wallet which uses one recovery code
-for several groups gets one key for each.
-
-**Two lengths of recovery code.** A user who writes a code down by hand wants
-it short, and 128 bits is 27 symbols. Against a quantum adversary, Grover's
-algorithm finds a 128-bit code in about $2^{64}$ evaluations, the margin of
-AES-128. Once the backup holds $\mathsf{sk}$, from which $\mathsf{qsk}$ is
-derived, the code is the shortest path to it for such an adversary (see
-[Security Considerations]). A 256-bit code gives about $2^{128}$, at the cost
-of 53 symbols. Neither length suits every wallet, so the two are separate
-wrapper ids with one construction, and a reader knows the length from the
-wrapper id instead of guessing it from the text.
-
-**The header is authenticated.** The associated data of wrappers
-$\mathtt{0x01}$ and $\mathtt{0x02}$ covers the magic, the container version,
-the wrapper id and the salt, so an envelope whose header was changed does not
-decrypt. The nonce is not in the associated data and does not need to be: it
-is an input of the cipher, so an envelope whose nonce was changed does not
-decrypt either.
-
 **Version 1 is Zkool's payload.** Backups users already made keep working,
 and the first implementation exists today.
 
@@ -1579,27 +1754,31 @@ same for every string.
 For the same reason, a string that is stored or sent encrypted only under
 public-key encryption based on discrete logarithms or on factoring is exposed
 to an adversary who records the ciphertext now and gains a quantum computer
-later. A passphrase with a memory-hard KDF and an AEAD (see [Open issues])
-does not have this weakness, and neither do wrappers $\mathtt{0x01}$ and
-$\mathtt{0x02}$, which use no public-key encryption.
+later. A backup file does not have this weakness, because its stanzas of
+type `mlkem768x25519` include ML-KEM-768: the file key stays secret as long as
+ML-KEM-768 or X25519 does. A passphrase with a memory-hard KDF and an AEAD
+(see [Open issues]) would not have it either.
 
-The security of an envelope under wrapper $\mathtt{0x01}$ or $\mathtt{0x02}$
-is that of its recovery code: whoever holds the envelope and the code holds
-the payload. The code has 128 bits of entropy under wrapper $\mathtt{0x01}$
-and 256 bits under wrapper $\mathtt{0x02}$, whatever the length of the key
-derived from it. A code that is not random, for instance one derived from a
-passphrase, would be open to guessing, since the key derivation is fast.
+Whoever holds a backup file and its encryption key holds the payload. The
+file key of age is 128 bits, so a backup file is at most as strong as a
+128-bit key, whatever secret its encryption key comes from. A backup mnemonic
+has 128 bits of entropy. A mnemonic that is not random, for instance one
+derived from a passphrase, would be open to guessing, since the derivation of
+the encryption key is fast. A quantum adversary that holds a backup file can
+search for its file key with Grover's algorithm, in about $2^{64}$
+evaluations, the margin of AES-128.
 
-A quantum adversary that holds an envelope can search for its code with
-Grover's algorithm: about $2^{64}$ evaluations of the key derivation and the
-cipher for a 128-bit code, and about $2^{128}$ for a 256-bit code. An
-envelope whose payload holds $\mathsf{sk}$ gives $\mathsf{qsk}$ to whoever
-opens it, for as long as the envelope is kept. A wallet that writes backups
-meant to resist such an adversary over that time uses wrapper $\mathtt{0x02}$
-(see [Recovery code]).
+An encryption key derived from a wallet seed is a leaf of ZIP 32's hardened
+derivation. A party that learns it learns nothing about the spending keys or
+the viewing keys of that seed. The seed, however, gives the encryption key:
+whoever holds the wallet seed and a backup file of that seed holds the
+payload, so a wallet seed also protects the signing share and $\mathsf{sk}$ of every member
+whose backup file it opens. A party that learns the seed of a wallet also
+opens every backup file written for it, on the same network.
 
 Only a string has a checksum. The payload bytes have none, and neither has an
-envelope under wrapper $\mathtt{0x00}$. Damaged bytes can decode to a wrong
+envelope under wrapper $\mathtt{0x00}$. A backup file detects damage: a
+changed byte makes it fail to open. Damaged bytes can decode to a wrong
 share, which the group commitment item catches when the envelope carries one (see
 [Restore, version 2]). A wallet that stores an unencrypted payload outside a
 string has to protect its integrity itself. A remaining part in the clear has
@@ -1622,12 +1801,21 @@ shares it computes with those the other members hold.
 
 The same holds for every other field. A version 2 payload and its items carry
 no proof that the $\mathsf{sk}$, the $\mathsf{ak}$, the group commitment and
-the other items come from one key generation: whoever can write them can write
-a payload and items that pass every step of [Restore, version 2] for a group
-of their own making. An unencrypted payload, in any form, can be written by
-anyone. An envelope under wrapper $\mathtt{0x01}$ or $\mathtt{0x02}$ can be
-written only by a holder of the recovery code, so the encryption is also what
-authenticates the payload and its items.
+the other items come from one key generation: whoever can write them can
+write a payload and items that pass every step of [Restore, version 2] for a
+group of their own making. An unencrypted payload, in any form, can be
+written by anyone.
+
+A backup file does not authenticate its writer either. Whoever holds a
+recipient can write a backup file that the matching encryption key opens,
+with a payload and items of their choice. A party that can also replace the
+files a user keeps, for instance on a cloud drive, can make the user restore
+a group of the party's making, and show addresses whose funds the party can
+spend. This is why [Storage and transmission] asks a wallet to protect a
+recipient as it protects the signing share and not to disclose it. The checks
+of [Restore] and [Restore, version 2] apply to the contents of a backup file
+as to any other payload, including the check of the viewing key against a
+source the member trusts before an address is shown.
 
 A backup made before a group's shares were replaced, by a refresh or a
 resharing, holds a share that no longer signs with the others. This ZIP does
@@ -1675,8 +1863,9 @@ Both implement version 1.
 
 # Test vectors
 
-This section has the test vectors of version 1, and then two of version 2
-(see [Test vectors for version 2]).
+This section has the test vectors of version 1, then two of version 2
+(see [Test vectors for version 2]), then those of the backup file (see
+[Test vectors for the backup file]).
 
 The version 1 test vectors are generated by the Python code proposed in
 zcash/zcash-test-vectors#136 [^zcash-test-vectors-pr], in three files:
@@ -1748,9 +1937,9 @@ are in hex.
   256, which no step of [Restore, version 2] notices when the wallet knows no
   verifying share of the group.
 
-C and D below are envelopes, and E is a 256-bit recovery code. Test vectors
-for a remaining part in each mode, and for registered and private-use items,
-will follow with an implementation.
+Test vectors for the envelope, for a remaining part in each mode, and for
+registered and private-use items, will follow with an implementation. Test
+vectors for the backup file are in [Test vectors for the backup file].
 
 A. Version 2, key source $\mathtt{0x00}$, short identifier 1, 2-of-3, Mainnet, birthday
 height 2700000, as a string:
@@ -1764,44 +1953,44 @@ height 0, as a string:
     payload 0202010305010001000000000000000000000000000000000000000000000000000000000000564f68c2939b5efe65c64d7fe0322e7aaebd7377cace2dbaf5dd3994fc8adc2400000000ad41d8ea8eaf287da6792d386d19e5238f5270ae710802c012f1bbac99e113109e4098939d8c69ce2e246d921bb3d7252a42f9aed39c81245c10606e92eb2922e22aa26359b531bd3e0118a865c7f33d2dda5fd7e30d8497d3bb7bf10fb46325
     string  zkfrost1qgpqzqc9qyqqzqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4j0drpf8x67lejuvntluqezu74wh4eh0jkw9ka0thfejn7g4hpyqqqqqq9dg8vw4r409p76v7fd8pk3nefr3af8ptn3pqpvqyh3hwkfncgnzz0ypxynnkxxnn3wy3keyxan6ujj5she4mfeeqfytsgxqm5jav5j9c325f34ndf3h5lqzx9gvhrlx0fdmf0a0ccdsjta8wmm7y8mgce9kskuxa
 
-C. The contents of vector A followed by the group commitment item of its
-group (typecode $\mathtt{0x01}$, length $\mathtt{0x20}$, then $\Phi_1$), in
-an envelope under wrapper $\mathtt{0x01}$, with the 128-bit recovery code of
-the example in [Recovery code]. The salt and the nonce are fixed for the
-vector; a real encoder draws them at random (see
-[Wrappers 0x01 and 0x02, recovery code]). The key is the one derived from the
-code and the salt.
+## Test vectors for the backup file
 
-    contents 020000020300012caaa5adfcad8ac0bb8c50dcdbbc1e954825be403f97f44bc1d6c543e15d4f3be032290024cf13c724758886048e05834d5d0a644e9c8e155d7e0bac3f25586b6caa11c3a0dffa5f21db1b2c6cc72d9b6af9d777884c2c7d3e06ad479732bec46cee110d012064ceadd10b03febb88c8fa5d335519e092c81363bc61af7b4929ec25c01fdcab
-    code     0004-1061-050R-3GG2-8A1C-60T3-GF6
-    bytes    000102030405060708090a0b0c0d0e0f
-    salt     5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a
-    nonce    010101010101010101010101010101010101010101010101
-    key      ca2d878470798047d7e1becbea03a177048a18f4f97a24420c17f3aa286bbb9c
-    envelope 8a5a464201015a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a010101010101010101010101010101010101010101010101df19a420a12c2f6f82a2f46c8d5d3581aa9b4dbac1d010df1afd7d7df5711bbd3ea589b4d445260845ab4eaffa0f2477c155d5192387bd8178c3688334a4aa2cf03a33d8bcc3022931d26ede94d230569edf509689e920428c6f836974ee63138eb811195d98d30e3a7e36d770a7aed4af2ca892b9d4a76756acc663552c1810f0c6f20df2ad0b140f5d0d5dc284082c62cf3713b0d84d310782d7817e
-    text     ilpGQgEBWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWloBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQHfGaQgoSwvb4Ki9GyNXTWBqptNusHQEN8a_X199XEbvT6libTURSYIRatOr_oPJHfBVdUZI4e9gXjDaIM0pKos8Doz2LzDAikx0m7elNIwVp7fUJaJ6SBCjG-DaXTuYxOOuBEZXZjTDjp-Ntdwp67UryyokrnUp2dWrMZjVSwYEPDG8g3yrQsUD10NXcKECCxizzcTsNhNMQeC14F-
+The values below were computed with an implementation of this text, and
+checked against a second computation written from ZIP 32 and ZIP 325 and
+against `age` 1.3.2. Identities are in the text form of age: Bech32 in uppercase with the human-readable part
+`AGE-SECRET-KEY-PQ-` [^age-mlkem768x25519].
 
-D. The same contents, salt and nonce under wrapper $\mathtt{0x02}$, with the
-256-bit recovery code of E:
+The wallet seed is the 64 bytes $\mathtt{0x00}, \mathtt{0x01}, \ldots,
+\mathtt{0x3F}$. Its encryption keys (see [Encryption key from a wallet seed])
+are:
 
-    code     0001-081G-8186-0W40-J2GB-1G6G-W3RG-2491-650N-2RBH-G68T-3CE1-T7GZ-2
-    bytes    000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
-    key      df4ee69d1ef5f84152ab446f348e6ee525acfd316cdfafa5603ceb5b4e4afb57
-    envelope 8a5a464201025a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a010101010101010101010101010101010101010101010101433d38e7494496a0fa06dd7f2c46a3f9250c404262f472511e6bd35c8247cdbc45b240aeb57edd77f3569149709b19d6a31abc99bafc5a86566d0b1a1a924e68dcb0104069c2e19cec3be7f6497dbe199a0eded87e6a18d3c5383457b1395701e5b10622b8eb715474b3c53ed141f616b4d909581d34c2e3bc6686652c6197c327b28461916864592182e2421bbc1b8bd596dbaddd99b32d3c06f18fdd
-    text     ilpGQgECWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWloBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQFDPTjnSUSWoPoG3X8sRqP5JQxAQmL0clEea9NcgkfNvEWyQK61ft1381aRSXCbGdajGryZuvxahlZtCxoakk5o3LAQQGnC4ZzsO-f2SX2-GZoO3th-ahjTxTg0V7E5VwHlsQYiuOtxVHSzxT7RQfYWtNkJWB00wuO8ZoZlLGGXwyeyhGGRaGRZIYLiQhu8G4vVltut3ZmzLTwG8Y_d
+    Mainnet  AGE-SECRET-KEY-PQ-16G5NCNQRD9UUPY9GP6XZLXQ8PMUKNAGJV74KCQ2ZX840Z0GNJP7S0SW5ES
+    Testnet  AGE-SECRET-KEY-PQ-1YDSR3RXAVKPTHWFTHJQHKWLD2Q5YLYFMSVZAD2XTPUD982WCRZWQR6CRZM
 
-E. The 256-bit recovery code made of the bytes
-$\mathtt{0x00}, \mathtt{0x01}, \ldots, \mathtt{0x1F}$, written as
-[Recovery code] specifies:
+With the prefix `x`, the name of a backup file opened by either key (see
+[File name of a backup file]) is `x-seed-natt0kp8.zbackup`.
 
-    bytes 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
-    text  0001-081G-8186-0W40-J2GB-1G6G-W3RG-2491-650N-2RBH-G68T-3CE1-T7GZ-2
+The backup mnemonic whose 16 bytes are zero is
+`zbackup abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about`.
+Its encryption key (see [Encryption key from a backup mnemonic]) is:
+
+    AGE-SECRET-KEY-PQ-1SHSSJLC0H5ALRZ5X37TNKM3V657LEYN5H2Q5PGA8Z06HE5VFVULSLYN8SQ
+
+Test vectors for whole backup files, written by an implementation of this
+text and by `age`, will follow.
 
 # Open issues
 
-- **Passphrase wrapper.** A wrapper id that encrypts the contents under a
-  passphrase, with a memory-hard KDF and an AEAD, as Zafe does for its
-  backups. It needs a choice of KDF and of its parameters.
+- **Passphrase.** Encrypting a backup file under a passphrase, with a
+  memory-hard KDF, as Zafe does for its backups. It would be another stanza
+  type of the backup file, such as the scrypt stanza of age
+  [^age-scrypt], which age requires to be the only stanza of its file. It
+  needs a choice of parameters.
+- **Subject of the key derived from a wallet seed.** The subject
+  $\texttt{“ZodlFROSTMemberBackupV1”}$ carries a wallet prefix and a version
+  number, as ZIP 325 advises for a private-use subject
+  [^zip-0325-private-use]. Should this key be a standardised metadata
+  protocol of ZIP 325 instead of a private-use key?
 - **The version 1 reject vector named "version 2".** One string of
   `frost_member_backup_decoding` is a version 1 payload with the first byte
   $\mathtt{0x02}$, expected to be rejected as an unsupported version (see
@@ -1874,7 +2063,31 @@ $\mathtt{0x00}, \mathtt{0x01}, \ldots, \mathtt{0x1F}$, written as
 
 [^xchacha]: [XChaCha: eXtended-nonce ChaCha and AEAD_XChaCha20_Poly1305. Internet-Draft draft-irtf-cfrg-xchacha-03](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-xchacha-03)
 
-[^crockford-base32]: [Douglas Crockford: Base 32](https://www.crockford.com/base32.html)
+[^age]: [The age file encryption format, `age-encryption.org/v1`. C2SP](https://github.com/C2SP/C2SP/blob/main/age.md)
+
+[^age-mlkem768x25519]: [The age file encryption format — The MLKEM768-X25519 (i.e. X-Wing) hybrid post-quantum recipient type](https://github.com/C2SP/C2SP/blob/main/age.md#the-mlkem768-x25519-ie-x-wing-hybrid-post-quantum-recipient-type)
+
+[^age-scrypt]: [The age file encryption format — The scrypt recipient type](https://github.com/C2SP/C2SP/blob/main/age.md#the-scrypt-recipient-type)
+
+[^age-armor]: [The age file encryption format — ASCII armor](https://github.com/C2SP/C2SP/blob/main/age.md#ascii-armor)
+
+[^rfc9180]: [RFC 9180: Hybrid Public Key Encryption](https://www.rfc-editor.org/rfc/rfc9180.html)
+
+[^hpke-pq]: [Post-Quantum and Post-Quantum/Traditional Hybrid Algorithms for HPKE. Internet-Draft draft-ietf-hpke-pq](https://datatracker.ietf.org/doc/draft-ietf-hpke-pq/)
+
+[^fips203]: [FIPS 203: Module-Lattice-Based Key-Encapsulation Mechanism Standard](https://doi.org/10.6028/NIST.FIPS.203)
+
+[^rfc7748]: [RFC 7748: Elliptic Curves for Security](https://www.rfc-editor.org/rfc/rfc7748.html)
+
+[^zip-0032-wallet-seeds]: [ZIP 32: Shielded Hierarchical Deterministic Wallets — Specification: Wallet seeds](zip-0032.rst#specification-wallet-seeds)
+
+[^zip-0032-registered-key-derivation]: [ZIP 32: Shielded Hierarchical Deterministic Wallets — Specification: Registered key derivation](zip-0032.rst#specification-registered-key-derivation)
+
+[^zip-0032-seed-fingerprints]: [ZIP 32: Shielded Hierarchical Deterministic Wallets — Seed Fingerprints](zip-0032.rst#seed-fingerprints)
+
+[^zip-0325-metadata-key-tree]: [ZIP 325: Account Metadata Keys — Metadata key tree](zip-0325.md#metadatakeytree)
+
+[^zip-0325-private-use]: [ZIP 325: Account Metadata Keys — Private-use metadata keys](zip-0325.md#private-usemetadatakeys)
 
 [^bip-0039]: [BIP 39: Mnemonic code for generating deterministic keys](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki)
 
