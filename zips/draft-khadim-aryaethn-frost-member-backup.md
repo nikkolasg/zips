@@ -712,6 +712,13 @@ seed (see [Encryption key from a wallet seed]) or a backup mnemonic (see
 [Encryption key from a backup mnemonic]). An encoder writes a backup file for
 the recipient of the encryption key.
 
+A backup file does not record which secret its encryption key comes from, and
+any 32 bytes are an identity. A later revision of this ZIP can therefore
+define other sources of an encryption key, each with its own form of file
+name (see [File name of a backup file]), without any change to the backup
+file: the files written before still open, and a decoder that does not know a
+new form of name reads it as a name that gives no hint.
+
 ### Encryption key from a wallet seed
 
 Let $S$ be a wallet seed of 32 to 252 bytes [^zip-0032-wallet-seeds], and
