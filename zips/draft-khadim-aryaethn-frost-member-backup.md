@@ -657,7 +657,11 @@ An encoder that writes a backup file:
 - MUST write as its plaintext an envelope under wrapper $\mathtt{0x00}$;
 - MUST write one stanza of type `mlkem768x25519` for each recipient, and at
   least one;
-- MUST NOT write a stanza of any other type.
+- MUST NOT write a stanza of another type that gives the file key;
+- MAY write stanzas of other types that give no file key. Some
+  implementations of age add one such stanza, with a random type and random
+  content, to every file they write, so that readers keep skipping the types
+  they do not know.
 
 The identity of any one recipient opens the file.
 
